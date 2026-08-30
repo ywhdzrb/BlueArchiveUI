@@ -1,0 +1,29 @@
+# 构建产物
+build/
+cmake-build-*/
+
+# IDE / 编辑器
+.idea/
+.vscode/
+*.pro.user
+*.user
+
+# 编译中间文件
+*.o
+*.a
+*.so
+*.obj
+CMakeCache.txt
+CMakeFiles/
+Makefile
+cmake_install.cmake
+
+# Qt 自动生成
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
+_autogen/
+
+# 本地临时文件
+*.png
+dbg_*.txt

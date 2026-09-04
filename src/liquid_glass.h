@@ -14,9 +14,8 @@
 #include <QSurfaceFormat>
 #include "liquid_glass_widgets.h"   // LiquidGlassThemeKeeper（按钮基类）
 
-// 液态玻璃（Liquid Glass）风格控件集：
-// 参考 iOS 26 / Material You 液态玻璃观感做简化实现——背景折射变形 + 半透明着色 +
-// 中心透光（无顶部高光/菲涅耳边缘光/描边，边缘保持纯折射材质）。
+// 磨砂玻璃（Frosted Glass）风格控件集：
+// 以 iOS 磨砂观感做简化实现——背景模糊 + 半透明着色（无折射变形、无中心透光）。
 // 包含两个控件：
 //  - LiquidGlassPanel：玻璃面板。渲染架构参考 OverShifted/LiquidGlass（GLFW 独立
 //    程序）：自建离屏 QOpenGLContext + FBO 渲染玻璃帧为 QImage，paintEvent 再画
@@ -35,18 +34,22 @@
 QSurfaceFormat probeGlFormat();
 bool isGlAvailable();
 
-// ---- 供玻璃版 md3 控件（switch/slider/progress/card）复用的公共玻璃材质函数 ----
+// ---- 供磨砂版 md3 控件（switch/slider/progress/card）复用的公共玻璃材质函数 ----
 
 // 抓取窗口快照作为玻璃材质源。self 为抓帧者（玻璃控件），w 为顶层窗口：
 // 抓帧期间隐藏所有带 lgGlass / md3FadeOverlay 属性的可见控件（玻璃控件
 // 连同自身、主题过渡遮罩），w->render 后恢复。返回值 RGBA8888 全窗快照。
 QImage grabGlassBackdrop(const QWidget *self, QWidget *w);
 
-// 纯 CPU 玻璃面板渲染：输出 size 大小的玻璃板（圆角 AA / 倒角折射 / tint /
-// 中心透光，公式与 GPU 片段着色器一致）。backdrop 为窗口快照，panelRect
-// 为本控件在窗口坐标系中的矩形（折射反查的坐标基线）。参数含义同板下：
-// corner 圆角半径 px；k / edgeK 折射与倒角带宽度（同 LiquidGlassPanel）；
-// glowMul 为透光强度倍率（小件可调低）。返回 Format_ARGB32。
+// 对窗口快照做两遍滑动窗口盒式模糊（磨砂素材源）。src 为 RGBA8888 快照，
+// radius 为模糊半径（px）。返回同尺寸模糊图，供 GL/CPU 磨砂采样。
+QImage frostedBackdrop(const QImage &src, int radius);
+
+// 纯 CPU 玻璃板渲染：输出 size 大小的磨砂板（圆角 AA / 背景模糊采样 /
+// tint 着色，公式与 GPU 片段着色器一致）。backdrop 为**已模糊**的窗口快照
+// （frostedBackdrop 产物），panelRect 为本控件在窗口坐标系中的矩形。
+// 磨砂版中 k / edgeK / glowMul 已弃用（保留仅为兼容旧调用），
+// corner 为圆角半径 px。返回 Format_ARGB32。
 QImage renderGlassPlateCPU(const QImage &backdrop, const QRect &panelRect,
                            const QSize &size, qreal corner, qreal k, qreal edgeK,
                            bool dark, qreal glowMul = 1.0);
@@ -67,7 +70,8 @@ public:
     // 重新抓取窗口背景并刷新玻璃材质（主题切换、背景变动后调用）
     void refreshBackdrop();
 
-    // 折射强度（边缘位移系数 k），默认 0.10，范围 0~0.2
+    // 磨砂强度（模糊半径系数），默认 0.10，范围 0~0.2。
+    // 兼容旧几何：改名后内部映射为模糊半径（clamp 后）。
     void setRefraction(qreal k);
     // 面板圆角半径，默认 24
     void setCornerRadius(qreal radius);
@@ -92,6 +96,7 @@ private:
 
     bool glOk_ = true;                // GL 通道可用；context 创建失败置 false
     QImage backdrop_;                 // 抓到的窗口快照（grabBackdrop 产物）
+    QImage frosted_;                  // 模糊后快照（磨砂采样源，随 backdrop_ 更新）
     QSize backdropWinSize_;           // 快照时的窗口几何（变化即素材失效）
     QImage glFrame_;                  // 渲染产物（GL 或 CPU 管线生成）
     bool backdropDirty_ = false;      // 快照已更新、glFrame_ 待重渲染
@@ -107,8 +112,8 @@ private:
     QOpenGLVertexArrayObject vao_;
 
     bool backdropGrabbing_ = false;   // 抓图期间防重入：render 同步会回调 resizeEvent
-    qreal refractionK_ = 0.10;        // 透镜折射强度（中心放大率）
-    qreal edgeRefractK_ = 0.18;       // 边缘环带压边强度（近边缘处放大率下沉）
+    qreal refractionK_ = 0.10;        // 磨砂强度（模糊半径系数，0~0.2）
+    qreal edgeRefractK_ = 0.18;       // 保留兼容（磨砂版弃用）
     qreal cornerRadius_ = 24.0;
     bool dark_ = false;
 

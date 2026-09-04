@@ -1,4 +1,4 @@
-# liquid_kit
+# BlueArchiveUI
 
 **Material Design 3 + 液态玻璃（Liquid Glass / iOS 26 风格）Qt6 Widgets 控件框架**。
 
@@ -18,10 +18,10 @@
 ## 目录结构
 
 ```text
-liquid_kit/
-├── CMakeLists.txt            # 构建静态库 liquid_kit（+ 可选示例）
+blue_archive_ui/
+├── CMakeLists.txt            # 构建静态库 blue_archive_ui（+ 可选示例）
 ├── src/
-│   ├── liquid_kit.h          # 聚合头：一行 include 全量组件
+│   ├── blue_archive_ui.h          # 聚合头：一行 include 全量组件
 │   ├── md3_theme.h/.cpp      # Md3Theme 主题
 │   ├── monet_theme.h/.cpp    # 莫奈主题生成（种子色/图片提取）
 │   ├── md3_button.h/.cpp     # Md3Button
@@ -43,22 +43,22 @@ liquid_kit/
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-./build/liquid_kit_minimal
+./build/blue_archive_ui_minimal
 ```
 
 ## 在项目中使用
 
 ```cmake
-add_subdirectory(../liquid_kit liquid_kit)
+add_subdirectory(../blue_archive_ui blue_archive_ui)
 
 add_executable(app main.cpp)
-target_link_libraries(app PRIVATE liquid_kit)
+target_link_libraries(app PRIVATE blue_archive_ui)
 ```
 
 头文件（内含全部组件）：
 
 ```cpp
-#include "liquid_kit.h"
+#include "blue_archive_ui.h"
 ```
 
 ## 快速上手
@@ -69,7 +69,7 @@ target_link_libraries(app PRIVATE liquid_kit)
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
-#include "liquid_kit.h"
+#include "blue_archive_ui.h"
 
 class Demo : public QWidget {
 public:
@@ -128,7 +128,7 @@ int main(int argc, char **argv) {
 }
 ```
 
-完整可编译示例见 `examples/minimal.cpp`（`cmake -B build && cmake --build build` 后运行 `./build/liquid_kit_minimal`）。
+完整可编译示例见 `examples/minimal.cpp`（`cmake -B build && cmake --build build` 后运行 `./build/blue_archive_ui_minimal`）。
 
 ## 组件速查
 
@@ -165,5 +165,5 @@ int main(int argc, char **argv) {
 
 ## 许可证
 
-- **liquid_kit 本体**：MIT（见 `LICENSE`）
+- **blue_archive_ui 本体**：MIT（见 `LICENSE`）
 - **third_party/material_color_utilities**：Google 官方 C++ 实现，Apache-2.0（见 `third_party/material_color_utilities/LICENSE`），许可证没有授权它被 embedding 后覆盖本项目的许可，遵循 Apache-2.0 再分发条款

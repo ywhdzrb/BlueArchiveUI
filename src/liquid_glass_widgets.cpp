@@ -1,5 +1,6 @@
 #include "liquid_glass_widgets.h"
 #include "liquid_glass.h"
+#include "md3_icon.h"
 
 #include <QPainter>
 #include <QPainterPath>
@@ -7,11 +8,16 @@
 #include <QEnterEvent>
 #include <QShowEvent>
 #include <QResizeEvent>
+#include <QFontMetrics>
+#include <QLineEdit>
+#include <QHideEvent>
+#include <QGuiApplication>
+#include <QScreen>
+#include <QGraphicsDropShadowEffect>
 #include <QVBoxLayout>
 #include <QDateTime>
 #include <QTimer>
-#include <QFile>
-#include <QTextStream>
+#include <optional>
 
 // ---------------------------------------------------------------------------
 // 基类：主题状态 + 快照抓取 + 玻璃板渲染
@@ -51,6 +57,8 @@ void LiquidGlassThemeKeeper::grabBackdrop(bool force)
         return;
     }
     backdrop_ = grabGlassBackdrop(this, w);
+    // 磨砂素材：恒定 20px 模糊（面板版 0.10 → 20px 的默认档）
+    frosted_ = frostedBackdrop(backdrop_, 20);
     backdropWinSize_ = w->size();   // 记录快照时的窗口几何，用于失效检测
     grabInProgress_ = false;
     update();
@@ -113,7 +121,9 @@ QImage LiquidGlassThemeKeeper::renderGlassPlate(qreal corner, qreal k, qreal edg
     if (backdrop_.isNull() || !backdrop_.rect().contains(pr) || stale) {
         return QImage();
     }
-    return renderGlassPlateCPU(backdrop_, pr, pr.size(), corner, k, edgeK, dark_, glowMul);
+    // 磨砂采样图换用模糊快照（frosted_）；k/edgeK/glowMul 已弃用只是兼容传参
+    return renderGlassPlateCPU(frosted_.isNull() ? backdrop_ : frosted_,
+                               pr, pr.size(), corner, k, edgeK, dark_, glowMul);
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +295,8 @@ void LiquidGlassSlider::setValue(int value)
     const qreal from = anim_.state() == QAbstractAnimation::Running ? displayValue_ : qreal(value_);
     value_ = value;
     anim_.stop();
+    // 复位时长：拖动分支可能把 anim_ 临时改短到 100ms，后续程序设值必须回到标准时长
+    anim_.setDuration(200);
     anim_.setStartValue(from);
     anim_.setEndValue(qreal(value_));
     anim_.start();
@@ -463,6 +475,10 @@ LiquidGlassProgressBar::LiquidGlassProgressBar(QWidget *parent)
 
 void LiquidGlassProgressBar::setRange(int min, int max)
 {
+    // 与滑块版一致：入参 min > max 时交换，保证后序 qBound 与比例计算正确
+    if (min > max) {
+        qSwap(min, max);
+    }
     min_ = min;
     max_ = max;
     value_ = qBound(min_, value_, max_);
@@ -778,7 +794,7 @@ void LiquidGlassNavigationBar::paintEvent(QPaintEvent *event)
 
         // 图标：选中 primary（玻璃泡内），否则 on-surface-variant
         const QColor iconColor = selected ? theme_.primary : theme_.onSurfaceVariant;
-        paintGlyph(p, items_.at(i).glyph, itemCx, iconCy, iconColor);
+        md3::paintGlyph(p, items_.at(i).glyph, itemCx, iconCy, iconColor, kGlyphStroke);
 
         // 标签：选中 primary Medium，否则 on-surface-variant；label 11px 紧凑
         QFont f = p.font();
@@ -811,6 +827,9 @@ void LiquidGlassNavigationBar::paintSelectedBubble(QPainter &p, const QRectF &bu
 
 void LiquidGlassNavigationBar::mousePressEvent(QMouseEvent *event)
 {
+    if (items_.isEmpty()) {
+        return;
+    }
     const qreal itemW = width() / qreal(items_.size());
     const int idx = int(event->pos().x() / itemW);
     if (idx >= 0 && idx < items_.size()) {
@@ -820,6 +839,9 @@ void LiquidGlassNavigationBar::mousePressEvent(QMouseEvent *event)
 
 void LiquidGlassNavigationBar::mouseMoveEvent(QMouseEvent *event)
 {
+    if (items_.isEmpty()) {
+        return;
+    }
     const qreal itemW = width() / qreal(items_.size());
     const int idx = int(event->pos().x() / itemW);
     const int target = (idx >= 0 && idx < items_.size()) ? idx : -1;
@@ -836,116 +858,733 @@ void LiquidGlassNavigationBar::leaveEvent(QEvent *event)
     update();
 }
 
-// 绘制 24x24 基准的线性图标，居中于 (cx, cy)。与 md3_side_bar::paintGlyph
-// 同源几何：角度约定 0°=右、90°=上、180°=左、270°=下。
-void LiquidGlassNavigationBar::paintGlyph(QPainter &p, Glyph glyph, qreal cx, qreal cy,
-                                          const QColor &color) const
+// ---------------------------------------------------------------------------
+// 玻璃弹出菜单
+// ---------------------------------------------------------------------------
+
+namespace {
+constexpr int kLgMenuRadius = 4;         // 与 Md3MenuPopup 一致
+constexpr int kLgMenuItemHeight = 48;
+constexpr int kLgMenuPadding = 8;
+}
+
+LiquidGlassMenuPopup::LiquidGlassMenuPopup(LiquidGlassDropdown *owner)
+    : QWidget(nullptr, Qt::Popup)
+    , owner_(owner)
 {
-    QPen pen(color, kGlyphStroke);
-    pen.setCapStyle(Qt::RoundCap);
-    pen.setJoinStyle(Qt::RoundJoin);
+    setAttribute(Qt::WA_TranslucentBackground);
+    setMouseTracking(true);
+    setCursor(Qt::PointingHandCursor);
 
-    p.save();
-    p.translate(cx - 12.0, cy - 12.0);
+    // 层级阴影（blur 16 / 偏移 2px，MD3 Elevation Level 2 等效）
+    auto *effect = new QGraphicsDropShadowEffect(this);
+    effect->setBlurRadius(16.0);
+    effect->setOffset(0, 2);
+    effect->setColor(QColor(0, 0, 0, 90));
+    setGraphicsEffect(effect);
+}
 
-    switch (glyph) {
-    case Glyph::Home: {
-        // 屋顶 + 墙体 + 门
-        p.setPen(pen);
-        QPainterPath path;
-        path.moveTo(2, 11);
-        path.lineTo(12, 3);
-        path.lineTo(22, 11);
-        p.drawPath(path);
+void LiquidGlassMenuPopup::setTheme(const Md3Theme &theme)
+{
+    theme_ = theme;
+    update();
+}
 
-        path = QPainterPath();
-        path.moveTo(6, 10);
-        path.lineTo(6, 20);
-        path.lineTo(18, 20);
-        path.lineTo(18, 10);
-        p.drawPath(path);
+void LiquidGlassMenuPopup::setItems(const QStringList &items)
+{
+    items_ = items;
+    update();
+}
 
-        path = QPainterPath();
-        path.moveTo(10, 20);
-        path.lineTo(10, 15);
-        path.lineTo(14, 15);
-        path.lineTo(14, 20);
-        p.drawPath(path);
-        break;
+void LiquidGlassMenuPopup::setSelectedIndex(int index)
+{
+    selectedIndex_ = index;
+    update();
+}
+
+// 宽度对齐宿主控件（至少 200px），高度由选项数量决定
+QSize LiquidGlassMenuPopup::popupSize() const
+{
+    const int w = qMax(200, owner_ ? owner_->width() : 200);
+    const int h = kLgMenuPadding * 2 + items_.size() * kLgMenuItemHeight;
+    return QSize(w, h);
+}
+
+int LiquidGlassMenuPopup::itemAt(const QPoint &pos) const
+{
+    if (pos.x() < 0 || pos.x() >= width()) {
+        return -1;
     }
-    case Glyph::Search: {
-        // 放大镜：圆 + 手柄
-        p.setPen(pen);
-        p.setBrush(Qt::NoBrush);
-        p.drawEllipse(QPointF(10, 10), 5, 5);
-        QPainterPath handle;
-        handle.moveTo(13.5, 13.5);
-        handle.lineTo(20, 20);
-        p.drawPath(handle);
-        break;
+    const int y = pos.y() - kLgMenuPadding;
+    if (y < 0) {
+        return -1;
     }
-    case Glyph::Star: {
-        // 五角星：内 / 外半径交替的十边形
-        QPainterPath path;
-        const qreal outer = 8.5;
-        const qreal inner = 3.5;
-        for (int k = 0; k < 10; ++k) {
-            const qreal r = (k % 2 == 0) ? outer : inner;
-            const qreal angle = qDegreesToRadians(-90.0 + k * 36.0);
-            const QPointF pt(12.0 + r * qCos(angle), 12.0 + r * qSin(angle));
-            if (k == 0) {
-                path.moveTo(pt);
-            } else {
-                path.lineTo(pt);
-            }
+    const int idx = y / kLgMenuItemHeight;
+    return idx < items_.size() ? idx : -1;
+}
+
+void LiquidGlassMenuPopup::paintEvent(QPaintEvent *event)
+{
+    Q_UNUSED(event)
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+
+    // 菜单为独立窗口，抓不到宿主背景快照：用半透磨砂表面色模拟玻璃体。
+    // 明暗由主题背景亮度推断（亮色表面 94%、暗色 86% 不透明度）
+    const QRectF r = rect().adjusted(1, 1, -1, -1);
+    QColor menuBg = theme_.surface;
+    menuBg.setAlphaF(theme_.background.lightness() < 128 ? 0.86 : 0.94);
+    p.setBrush(menuBg);
+    p.setPen(Qt::NoPen);
+    p.drawRoundedRect(r, kLgMenuRadius, kLgMenuRadius);
+
+    for (int i = 0; i < items_.size(); ++i) {
+        const QRectF itemRect(0, kLgMenuPadding + i * kLgMenuItemHeight,
+                              width(), kLgMenuItemHeight);
+
+        // hover 状态层：on-surface 8% 叠加
+        if (i == hoverIndex_) {
+            QColor layer = Md3Theme::blend(theme_.surface, theme_.onSurface, 0.08);
+            p.setBrush(layer);
+            p.setPen(Qt::NoPen);
+            p.drawRoundedRect(itemRect.adjusted(1, 1, -1, -1), kLgMenuRadius, kLgMenuRadius);
         }
-        path.closeSubpath();
-        p.setPen(pen);
-        p.drawPath(path);
-        break;
-    }
-    case Glyph::Person: {
-        // 头部实心圆 + 肩部半圆弧
-        p.setPen(Qt::NoPen);
-        p.setBrush(color);
-        p.drawEllipse(QPointF(12, 8.5), 3.5, 3.5);
 
-        p.setPen(pen);
-        p.setBrush(Qt::NoBrush);
-        QPainterPath shoulders;
-        shoulders.moveTo(4, 21);
-        shoulders.arcTo(QRectF(4, 14, 16, 14), 180, 180);
-        p.drawPath(shoulders);
-        break;
+        // 选项文字：选中项 primary 加粗，其余 on-surface
+        const bool selected = (i == selectedIndex_);
+        QFont f = p.font();
+        f.setPointSizeF(16.0);
+        f.setWeight(selected ? QFont::Medium : QFont::Normal);
+        p.setFont(f);
+        p.setPen(selected ? theme_.primary : theme_.onSurface);
+        const qreal textX = kLgMenuPadding + 16;
+        const QString elided = QFontMetrics(f).elidedText(items_.at(i), Qt::ElideRight,
+                                                          int(width() - textX - kLgMenuPadding));
+        p.drawText(QRectF(textX, itemRect.y(), width() - textX - kLgMenuPadding, kLgMenuItemHeight),
+                   Qt::AlignVCenter | Qt::AlignLeft, elided);
+
+        // 选中标记：对勾折线
+        if (selected) {
+            const qreal cx = kLgMenuPadding + 8;
+            const qreal cy = itemRect.center().y();
+            QPen checkPen(theme_.primary, 2.0);
+            checkPen.setCapStyle(Qt::RoundCap);
+            checkPen.setJoinStyle(Qt::RoundJoin);
+            p.setPen(checkPen);
+            QPainterPath check;
+            check.moveTo(cx - 3, cy);
+            check.lineTo(cx, cy + 3);
+            check.lineTo(cx + 4, cy - 3);
+            p.drawPath(check);
+        }
     }
-    case Glyph::Palette: {
-        // 调色板：圆盘 + 孔
-        p.setPen(pen);
-        p.setBrush(Qt::NoBrush);
-        p.drawEllipse(QPointF(12, 12), 9, 9);
-        p.setPen(Qt::NoPen);
-        p.setBrush(color);
-        p.drawEllipse(QPointF(7, 7), 1.5, 1.5);
-        p.drawEllipse(QPointF(17, 7), 1.5, 1.5);
-        p.drawEllipse(QPointF(12, 18), 1.5, 1.5);
-        p.drawEllipse(QPointF(5, 13), 1.5, 1.5);
-        p.drawEllipse(QPointF(19, 13), 1.5, 1.5);
-        break;
+}
+
+void LiquidGlassMenuPopup::mouseMoveEvent(QMouseEvent *event)
+{
+    const int idx = itemAt(event->pos());
+    if (idx != hoverIndex_) {
+        hoverIndex_ = idx;
+        update();
     }
-    case Glyph::Drop: {
-        // 水滴：顶部尖角 + 四段贝塞尔下摆成圆底
-        p.setPen(pen);
-        p.setBrush(Qt::NoBrush);
-        QPainterPath drop;
-        drop.moveTo(12, 4);
-        drop.cubicTo(16.4, 8.4, 19, 11.8, 19, 15);
-        drop.cubicTo(19, 18.9, 15.9, 21, 12, 21);
-        drop.cubicTo(8.1, 21, 5, 18.9, 5, 15);
-        drop.cubicTo(5, 11.8, 7.6, 8.4, 12, 4);
-        p.drawPath(drop);
-        break;
+}
+
+void LiquidGlassMenuPopup::mousePressEvent(QMouseEvent *event)
+{
+    Q_UNUSED(event)
+}
+
+void LiquidGlassMenuPopup::mouseReleaseEvent(QMouseEvent *event)
+{
+    const int idx = itemAt(event->pos());
+    if (idx >= 0) {
+        emit itemClicked(idx);
     }
+}
+
+void LiquidGlassMenuPopup::leaveEvent(QEvent *event)
+{
+    Q_UNUSED(event)
+    hoverIndex_ = -1;
+    update();
+}
+
+void LiquidGlassMenuPopup::hideEvent(QHideEvent *event)
+{
+    Q_UNUSED(event)
+    emit closed();
+}
+
+// ---------------------------------------------------------------------------
+// 玻璃输入框
+// ---------------------------------------------------------------------------
+
+namespace {
+// 与 md3_text_field 一致的几何常量
+constexpr int kFieldHeight = 56;
+constexpr qreal kFieldRadiusTop = 4.0;
+constexpr qreal kFieldIconSize = 18.0;
+constexpr int kFieldIconPad = 12;
+constexpr int kFieldTextPad = 12;      // 编辑框左/右默认内边距
+constexpr int kFieldIconGap = 8;       // 图标与文字区的间隔
+}
+
+LiquidGlassTextField::LiquidGlassTextField(const QString &placeholder, QWidget *parent)
+    : LiquidGlassThemeKeeper(parent)
+{
+    setFixedHeight(kFieldHeight);
+    setCursor(Qt::IBeamCursor);
+
+    // 内部编辑框：透明背景无边框，玻璃底色由父控件绘制
+    editor_ = new QLineEdit(this);
+    editor_->setPlaceholderText(placeholder);
+    editor_->setFrame(false);
+    editor_->setAttribute(Qt::WA_MacShowFocusRect, false);
+    editor_->setStyleSheet("QLineEdit { background: transparent; border: none; }");
+
+    QFont inputFont = editor_->font();
+    inputFont.setPointSizeF(16.0);
+    editor_->setFont(inputFont);
+
+    // 聚焦指示线过渡动画，150ms 符合 MD3 短动效时长
+    anim_.setDuration(150);
+    anim_.setEasingCurve(QEasingCurve::OutCubic);
+    connect(&anim_, &QVariantAnimation::valueChanged, this, [this](const QVariant &v) {
+        focusProgress_ = v.toReal();
+        update();
+    });
+    connect(editor_, &QLineEdit::textChanged, this, [this](const QString &) { update(); });
+    connect(editor_, &QLineEdit::selectionChanged, this, [this]() { update(); });
+}
+
+void LiquidGlassTextField::setTheme(const Md3Theme &theme)
+{
+    LiquidGlassThemeKeeper::setTheme(theme);
+    QPalette pal = editor_->palette();
+    pal.setColor(QPalette::Text, theme_.onSurface);
+    pal.setColor(QPalette::PlaceholderText, theme_.onSurfaceVariant);
+    editor_->setPalette(pal);
+    update();
+}
+
+QString LiquidGlassTextField::text() const
+{
+    return editor_->text();
+}
+
+void LiquidGlassTextField::setText(const QString &text)
+{
+    editor_->setText(text);
+}
+
+void LiquidGlassTextField::setPlaceholderText(const QString &placeholder)
+{
+    editor_->setPlaceholderText(placeholder);
+}
+
+void LiquidGlassTextField::setLeadingIcon(std::optional<md3::Glyph> glyph)
+{
+    leadingGlyph_ = glyph;
+    resizeEvent(nullptr);
+    update();
+}
+
+void LiquidGlassTextField::setTrailingIcon(std::optional<md3::Glyph> glyph)
+{
+    trailingGlyph_ = glyph;
+    resizeEvent(nullptr);
+    update();
+}
+
+void LiquidGlassTextField::setTrailingIconClicked(std::function<void()> callback)
+{
+    trailingCallback_ = std::move(callback);
+}
+
+QSize LiquidGlassTextField::sizeHint() const
+{
+    return QSize(240, kFieldHeight);
+}
+
+// 顶部填充区矩形：与控件同尺寸（玻璃输入框不加 helper 区，保持 56 高）
+QRectF LiquidGlassTextField::textFieldRect() const
+{
+    return QRectF(0, 0, width(), kFieldHeight);
+}
+
+void LiquidGlassTextField::showEvent(QShowEvent *event)
+{
+    LiquidGlassThemeKeeper::showEvent(event);
+    backdropDeferred();
+}
+
+void LiquidGlassTextField::resizeEvent(QResizeEvent *event)
+{
+    Q_UNUSED(event)
+    // 左/右按前后缀图标是否显示增加内边距，底边留给指示线 8px
+    const qreal left = leadingGlyph_.has_value() ? (kFieldTextPad + kFieldIconSize + kFieldIconGap)
+                                                 : kFieldTextPad;
+    const qreal right = trailingGlyph_.has_value() ? (kFieldTextPad + kFieldIconSize + kFieldIconGap)
+                                                   : kFieldTextPad;
+    editor_->setGeometry(int(left), 4, int(width() - left - right), kFieldHeight - 8);
+}
+
+void LiquidGlassTextField::paintEvent(QPaintEvent *event)
+{
+    Q_UNUSED(event)
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+
+    // 玻璃底板：仅顶部圆角。素材未就绪时回退表面色（md3 同款观感）
+    const QRectF fr = textFieldRect();
+    QImage glass = renderGlassPlate(kFieldRadiusTop, 0.10, 0.18, 0.7);
+    QPainterPath shell;
+    shell.moveTo(0, kFieldRadiusTop);
+    shell.arcTo(QRectF(0, 0, 2 * kFieldRadiusTop, 2 * kFieldRadiusTop), 180, -90);
+    shell.lineTo(fr.width() - 2 * kFieldRadiusTop, 0);
+    shell.arcTo(QRectF(fr.width() - 2 * kFieldRadiusTop, 0, 2 * kFieldRadiusTop, 2 * kFieldRadiusTop), 90, -90);
+    shell.lineTo(fr.width(), fr.height());
+    shell.lineTo(0, fr.height());
+    shell.closeSubpath();
+
+    if (!glass.isNull()) {
+        p.setClipPath(shell);
+        p.drawImage(fr.toRect(), glass, fr.toRect());
+        p.setClipping(false);
+    } else {
+        p.fillPath(shell, theme_.surfaceContainerHighest);
     }
 
-    p.restore();
+    // 前后缀图标：18px 线性图标，on-surface-variant
+    const qreal cy = fr.height() / 2.0;
+    if (leadingGlyph_.has_value()) {
+        md3::paintGlyph(p, *leadingGlyph_, kFieldIconPad + kFieldIconSize / 2.0, cy,
+                        theme_.onSurfaceVariant, 2.0);
+    }
+    if (trailingGlyph_.has_value()) {
+        md3::paintGlyph(p, *trailingGlyph_, width() - kFieldIconPad - kFieldIconSize / 2.0, cy,
+                        theme_.onSurfaceVariant, 2.0);
+    }
+
+    // 底部指示线：未聚焦 1px outline-variant，聚焦 2px primary，渐变过渡
+    const QColor lineColor = Md3Theme::blend(theme_.outlineVariant, theme_.primary, focusProgress_);
+    p.setPen(QPen(lineColor, 1.0 + focusProgress_));
+    p.drawLine(QPointF(0, fr.height() - 0.5), QPointF(fr.width(), fr.height() - 0.5));
+}
+
+void LiquidGlassTextField::mousePressEvent(QMouseEvent *event)
+{
+    if (trailingGlyph_.has_value()) {
+        // 命中区域：以图标中心为圆心的约 24px 邻域（x/y 双向判定，避免全高横带误触）
+        const qreal cx = width() - kFieldIconPad - kFieldIconSize / 2.0;
+        const qreal cy = kFieldHeight / 2.0;
+        if (qAbs(event->position().x() - cx) < 12.0
+            && qAbs(event->position().y() - cy) < 12.0) {
+            if (trailingCallback_) {
+                trailingCallback_();
+            }
+            emit trailingIconClicked();
+            return;
+        }
+    }
+    editor_->setFocus();
+}
+
+void LiquidGlassTextField::focusInEvent(QFocusEvent *event)
+{
+    Q_UNUSED(event)
+    anim_.stop();
+    anim_.setStartValue(focusProgress_);
+    anim_.setEndValue(1.0);
+    anim_.start();
+}
+
+void LiquidGlassTextField::focusOutEvent(QFocusEvent *event)
+{
+    Q_UNUSED(event)
+    anim_.stop();
+    anim_.setStartValue(focusProgress_);
+    anim_.setEndValue(0.0);
+    anim_.start();
+}
+
+// ---------------------------------------------------------------------------
+// 玻璃浮动按钮
+// ---------------------------------------------------------------------------
+
+LiquidGlassFab::LiquidGlassFab(md3::Glyph glyph, QWidget *parent)
+    : LiquidGlassThemeKeeper(parent)
+    , glyph_(glyph)
+{
+    setCursor(Qt::PointingHandCursor);
+    setFixedSize(56, 56);
+
+    // 状态层动画：150ms OutCubic
+    stateAnim_.setDuration(150);
+    stateAnim_.setEasingCurve(QEasingCurve::OutCubic);
+    connect(&stateAnim_, &QVariantAnimation::valueChanged, this, [this](const QVariant &v) {
+        stateAlpha_ = v.toReal();
+        update();
+    });
+}
+
+QSize LiquidGlassFab::sizeHint() const
+{
+    return size_ == Size::Small ? QSize(40, 40) : QSize(56, 56);
+}
+
+void LiquidGlassFab::setGlyph(md3::Glyph glyph)
+{
+    glyph_ = glyph;
+    update();
+}
+
+void LiquidGlassFab::setSize(Size size)
+{
+    size_ = size;
+    setFixedSize(sizeHint());
+    update();
+}
+
+void LiquidGlassFab::setTonal(bool tonal)
+{
+    tonal_ = tonal;
+    update();
+}
+
+void LiquidGlassFab::showEvent(QShowEvent *event)
+{
+    LiquidGlassThemeKeeper::showEvent(event);
+    backdropDeferred();
+}
+
+void LiquidGlassFab::resizeEvent(QResizeEvent *event)
+{
+    LiquidGlassThemeKeeper::resizeEvent(event);
+    backdropDeferred();
+}
+
+void LiquidGlassFab::enterEvent(QEnterEvent *event)
+{
+    Q_UNUSED(event)
+    hovered_ = true;
+    stateAnim_.stop();
+    stateAnim_.setStartValue(stateAlpha_);
+    stateAnim_.setEndValue(hkHoverAlpha);
+    stateAnim_.start();
+}
+
+void LiquidGlassFab::leaveEvent(QEvent *event)
+{
+    Q_UNUSED(event)
+    hovered_ = false;
+    stateAnim_.stop();
+    stateAnim_.setStartValue(stateAlpha_);
+    stateAnim_.setEndValue(0.0);
+    stateAnim_.start();
+}
+
+// 按下时状态层抬升（QAbstractButton 基类更新 isDown() 后驱动动画）
+void LiquidGlassFab::mousePressEvent(QMouseEvent *event)
+{
+    QAbstractButton::mousePressEvent(event);
+    if (isDown()) {
+        stateAnim_.stop();
+        stateAnim_.setStartValue(stateAlpha_);
+        stateAnim_.setEndValue(hkHoverAlpha);
+        stateAnim_.start();
+    }
+}
+
+// 松开回落到 hover 档
+void LiquidGlassFab::mouseReleaseEvent(QMouseEvent *event)
+{
+    QAbstractButton::mouseReleaseEvent(event);
+    stateAnim_.stop();
+    stateAnim_.setStartValue(stateAlpha_);
+    stateAnim_.setEndValue(hovered_ ? hkHoverAlpha : 0.0);
+    stateAnim_.start();
+}
+
+// 绘制：圆形玻璃板 → 主题色 tint（primary / secondary-container）→
+// 顶部高光 → 状态层（hover/press 白色叠加）→ 图标
+void LiquidGlassFab::paintEvent(QPaintEvent *event)
+{
+    Q_UNUSED(event)
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+
+    const QRectF r = rect();
+    const qreal dia = qMin(r.width(), r.height());
+    const qreal radius = dia / 2.0;
+    const QPointF c = r.center();
+
+    // 圆形玻璃板：以控件外接方为取景框，折射窗口背景
+    QImage glass = renderGlassPlate(radius, 0.10, 0.18, 1.0);
+    QPainterPath shell;
+    shell.addEllipse(c, radius - 1, radius - 1);
+    if (!glass.isNull()) {
+        p.setClipPath(shell);
+        p.drawImage(r.toRect(), glass, r.toRect());
+        p.setClipping(false);
+    } else {
+        p.fillPath(shell, theme_.surfaceContainerHighest);
+    }
+
+    // 主题色 tint：玻璃着彩色罩，主调 primary / tonal 用 secondary-container。
+    // 强度取 0.45：暗背景上足以读出玻璃内透出的主题色
+    QColor tint = tonal_ ? theme_.secondaryContainer : theme_.primary;
+    tint.setAlphaF(0.45);
+    p.fillPath(shell, tint);
+
+    // 顶部高光带：白色渐变强化玻璃球感（1/3 高度）
+    if (!glass.isNull()) {
+        QLinearGradient sheen(c.x(), 0, c.x(), dia * 0.5);
+        sheen.setColorAt(0.0, QColor(255, 255, 255, 70));
+        sheen.setColorAt(1.0, QColor(255, 255, 255, 0));
+        p.setPen(Qt::NoPen);
+        p.setBrush(sheen);
+        p.drawEllipse(c, radius - 1, radius - 1);
+    }
+
+    // hover / 按压状态层：白色 12% 叠加
+    if (stateAlpha_ > 0.0) {
+        QColor layer = QColor(255, 255, 255, int(2.55 * stateAlpha_));
+        p.fillPath(shell, layer);
+    }
+
+    // 图标：tonal 用 on-secondary-container，其余 on-primary
+    const QColor iconColor = tonal_ ? theme_.onSecondaryContainer : theme_.onPrimary;
+    md3::paintGlyph(p, glyph_, c.x(), c.y(), iconColor, 2.0);
+}
+
+// ---------------------------------------------------------------------------
+// 玻璃下拉选择框
+// ---------------------------------------------------------------------------
+
+namespace {
+constexpr int kDropHeight = 56;             // 与 md3_dropdown 一致
+constexpr qreal kDropRadiusTop = 4.0;
+constexpr int kDropTextPad = 16;            // 文字左内边距
+constexpr int kDropArrowPad = 16;           // 箭头中心距右缘
+}
+
+LiquidGlassDropdown::LiquidGlassDropdown(const QStringList &items, const QString &placeholder,
+                                         QWidget *parent)
+    : LiquidGlassThemeKeeper(parent)
+    , items_(items)
+    , placeholder_(placeholder)
+{
+    setFixedHeight(kDropHeight);
+    setCursor(Qt::PointingHandCursor);
+
+    QFont f = font();
+    f.setPointSizeF(16.0);
+    setFont(f);
+
+    anim_.setDuration(150);
+    anim_.setEasingCurve(QEasingCurve::OutCubic);
+    connect(&anim_, &QVariantAnimation::valueChanged, this, [this](const QVariant &v) {
+        activeProgress_ = v.toReal();
+        update();
+    });
+
+    popup_ = new LiquidGlassMenuPopup(this);
+    connect(popup_, &LiquidGlassMenuPopup::itemClicked, this, &LiquidGlassDropdown::onItemClicked);
+    connect(popup_, &LiquidGlassMenuPopup::closed, this, &LiquidGlassDropdown::onPopupClosed);
+}
+
+// popup_（Qt::Popup 顶层窗口）构造时忽略父指针，必须显式释放
+LiquidGlassDropdown::~LiquidGlassDropdown()
+{
+    delete popup_;
+}
+
+void LiquidGlassDropdown::setItems(const QStringList &items)
+{
+    items_ = items;
+    if (currentIndex_ >= items_.size()) {
+        currentIndex_ = -1;
+        emit currentIndexChanged(currentIndex_);
+    }
+    update();
+}
+
+void LiquidGlassDropdown::setPlaceholderText(const QString &placeholder)
+{
+    placeholder_ = placeholder;
+    update();
+}
+
+void LiquidGlassDropdown::setCurrentIndex(int index)
+{
+    if (index == currentIndex_) {
+        return;
+    }
+    currentIndex_ = index;
+    update();
+    emit currentIndexChanged(index);
+}
+
+QString LiquidGlassDropdown::currentText() const
+{
+    if (currentIndex_ >= 0 && currentIndex_ < items_.size()) {
+        return items_.at(currentIndex_);
+    }
+    return QString();
+}
+
+QSize LiquidGlassDropdown::sizeHint() const
+{
+    return QSize(200, kDropHeight);
+}
+
+void LiquidGlassDropdown::showEvent(QShowEvent *event)
+{
+    LiquidGlassThemeKeeper::showEvent(event);
+    backdropDeferred();
+}
+
+void LiquidGlassDropdown::resizeEvent(QResizeEvent *event)
+{
+    LiquidGlassThemeKeeper::resizeEvent(event);
+    backdropDeferred();
+}
+
+// 绘制：玻璃底板（顶部圆角）→ 状态层 → 文本 → 箭头 → 底部指示线
+void LiquidGlassDropdown::paintEvent(QPaintEvent *event)
+{
+    Q_UNUSED(event)
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+
+    QImage glass = renderGlassPlate(kDropRadiusTop, 0.10, 0.18, 0.7);
+    QPainterPath shell;
+    shell.moveTo(0, kDropRadiusTop);
+    shell.arcTo(QRectF(0, 0, 2 * kDropRadiusTop, 2 * kDropRadiusTop), 180, -90);
+    shell.lineTo(width() - 2 * kDropRadiusTop, 0);
+    shell.arcTo(QRectF(width() - 2 * kDropRadiusTop, 0, 2 * kDropRadiusTop, 2 * kDropRadiusTop), 90, -90);
+    shell.lineTo(width(), height());
+    shell.lineTo(0, height());
+    shell.closeSubpath();
+
+    if (!glass.isNull()) {
+        p.setClipPath(shell);
+        p.drawImage(rect(), glass, rect());
+        p.setClipping(false);
+    } else {
+        p.fillPath(shell, theme_.surfaceContainerHighest);
+    }
+
+    // hover / 展开状态层：on-surface 10%，透明度随过渡进度
+    if (activeProgress_ > 0.0) {
+        QColor layer = Md3Theme::blend(theme_.surfaceContainerHighest, theme_.onSurface,
+                                       0.10 * activeProgress_);
+        p.fillPath(shell, layer);
+    }
+
+    // 文本：已选中显示选项内容，否则显示占位提示
+    const bool hasValue = currentIndex_ >= 0 && currentIndex_ < items_.size();
+    p.setFont(font());
+    p.setPen(hasValue ? theme_.onSurface : theme_.onSurfaceVariant);
+    const QString text = hasValue ? items_.at(currentIndex_) : placeholder_;
+    const qreal textRight = width() - 2 * kDropArrowPad - 8;
+    const QString elided = QFontMetrics(font()).elidedText(text, Qt::ElideRight,
+                                                           qMax(0, int(textRight - kDropTextPad)));
+    p.drawText(QRectF(kDropTextPad, 0, textRight - kDropTextPad, height()),
+               Qt::AlignVCenter | Qt::AlignLeft, elided);
+
+    // 下拉箭头：V 形折线，激活时过渡为 primary
+    if (!items_.isEmpty()) {
+        const QColor arrowColor = Md3Theme::blend(theme_.onSurfaceVariant, theme_.primary,
+                                                  activeProgress_);
+        QPen pen(arrowColor, 2.0);
+        pen.setCapStyle(Qt::RoundCap);
+        pen.setJoinStyle(Qt::RoundJoin);
+        p.setPen(pen);
+        const qreal cx = width() - kDropArrowPad - 5;
+        const qreal cy = height() / 2.0;
+        QPainterPath arrow;
+        arrow.moveTo(cx - 4, cy - 2);
+        arrow.lineTo(cx, cy + 2);
+        arrow.lineTo(cx + 4, cy - 2);
+        p.drawPath(arrow);
+    }
+
+    // 底部指示线：未激活 1px outline-variant，激活 2px primary，渐变过渡
+    const QColor lineColor = Md3Theme::blend(theme_.outlineVariant, theme_.primary, activeProgress_);
+    p.setPen(QPen(lineColor, 1.0 + activeProgress_));
+    p.drawLine(QPointF(0, height() - 0.5), QPointF(width(), height() - 0.5));
+}
+
+void LiquidGlassDropdown::mousePressEvent(QMouseEvent *event)
+{
+    Q_UNUSED(event)
+    if (items_.isEmpty()) {
+        return;
+    }
+    if (menuOpen_) {
+        popup_->hide();
+        return;
+    }
+    showPopup();
+}
+
+void LiquidGlassDropdown::enterEvent(QEnterEvent *event)
+{
+    Q_UNUSED(event)
+    hovered_ = true;
+    animateActive(hovered_ || menuOpen_);
+}
+
+void LiquidGlassDropdown::leaveEvent(QEvent *event)
+{
+    Q_UNUSED(event)
+    hovered_ = false;
+    animateActive(hovered_ || menuOpen_);
+}
+
+void LiquidGlassDropdown::animateActive(bool active)
+{
+    anim_.stop();
+    anim_.setStartValue(activeProgress_);
+    anim_.setEndValue(active ? 1.0 : 0.0);
+    anim_.start();
+}
+
+// 在控件正下方弹出菜单，空间不足时向上弹出
+void LiquidGlassDropdown::showPopup()
+{
+    popup_->setTheme(theme_);
+    popup_->setItems(items_);
+    popup_->setSelectedIndex(currentIndex_);
+    const QSize sz = popup_->popupSize();
+
+    const QPoint anchor = mapToGlobal(QPoint(0, height()));
+    QPoint pos = anchor;
+    if (const QScreen *screen = QGuiApplication::screenAt(anchor)) {
+        if (anchor.y() + sz.height() > screen->availableGeometry().bottom()) {
+            pos = mapToGlobal(QPoint(0, -sz.height()));
+        }
+    }
+
+    popup_->resize(sz);
+    popup_->move(pos);
+    menuOpen_ = true;
+    animateActive(true);
+    popup_->show();
+    popup_->raise();
+    popup_->setFocus();
+}
+
+void LiquidGlassDropdown::onItemClicked(int index)
+{
+    setCurrentIndex(index);
+    popup_->hide();
+}
+
+void LiquidGlassDropdown::onPopupClosed()
+{
+    menuOpen_ = false;
+    animateActive(hovered_ || menuOpen_);
 }

@@ -36,6 +36,10 @@ void Md3ProgressBar::setTheme(const Md3Theme &theme)
 // 设置确定模式取值范围，越界值就近截断
 void Md3ProgressBar::setRange(int min, int max)
 {
+    // 与滑块版一致：入参 min > max 时交换，保证后序 qBound 与比例计算正确
+    if (min > max) {
+        qSwap(min, max);
+    }
     min_ = min;
     max_ = max;
     value_ = qBound(min_, value_, max_);

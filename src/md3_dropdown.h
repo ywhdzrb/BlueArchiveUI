@@ -60,6 +60,7 @@ public:
     explicit Md3Dropdown(const QStringList &items = QStringList(),
                          const QString &placeholder = QString(),
                          QWidget *parent = nullptr);
+    ~Md3Dropdown() override;
 
     void setTheme(const Md3Theme &theme);
 

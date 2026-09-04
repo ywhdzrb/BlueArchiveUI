@@ -4,7 +4,11 @@
 #include <QAbstractButton>
 #include <QVariantAnimation>
 #include <QImage>
+#include <QStringList>
+#include <optional>
+#include <functional>
 #include "md3_theme.h"
+#include "md3_icon.h"
 
 // ---------------------------------------------------------------------------
 // 液态玻璃控件集：玻璃材质的 md3 风格控件（开关 / 滑块 / 进度条 / 卡片）。
@@ -50,6 +54,7 @@ protected:
     Md3Theme theme_;
     bool dark_ = false;
     QImage backdrop_;                // 全窗快照（RGBA8888）
+    QImage frosted_;                 // 模糊后快照（磨砂采样源，随 backdrop_ 更新）
     QSize backdropWinSize_;          // 快照时的窗口几何（变化即素材失效）
     qint64 lastGrabbedMs_ = 0;       // 实例级抓帧节流时间戳
     bool grabInProgress_ = false;    // 抓帧防重入（hide/show 触发 resize 再入）
@@ -190,16 +195,8 @@ class LiquidGlassNavigationBar : public LiquidGlassThemeKeeper
     Q_OBJECT
 
 public:
-    // 内置线性图标，与 Md3SideBar 同一组（独立枚举避免类间依赖）
-    enum class Glyph {
-        Home,     // 首页
-        Search,   // 搜索
-        Star,     // 收藏
-        Person,   // 我的
-        Palette,  // 调色板
-        Drop,     // 水滴（液态玻璃）
-    };
-    Q_ENUM(Glyph)
+    // 图标枚举直接取公共图标库，与 Md3SideBar 共用一份实现
+    using Glyph = md3::Glyph;
 
     explicit LiquidGlassNavigationBar(QWidget *parent = nullptr);
 
@@ -227,9 +224,6 @@ private:
     // 选中玻璃泡的绘制（材质 = 玻璃板 + 着色 + 高光带 + 底暗缘）
     void paintSelectedBubble(QPainter &p, const QRectF &bubble);
 
-    // 在 (cx, cy) 处绘制 24x24 基准线性图标（与 md3_side_bar 一致）
-    void paintGlyph(QPainter &p, Glyph glyph, qreal cx, qreal cy, const QColor &color) const;
-
     struct Item {
         QString label;
         Glyph glyph = Glyph::Home;
@@ -240,4 +234,198 @@ private:
     int hoverIndex_ = -1;
     qreal floatIndex_ = -1.0;    // 玻璃泡滑动动画中的连续索引
     QVariantAnimation bubbleAnim_;
+};
+
+class QLineEdit;
+class LiquidGlassDropdown;
+
+// ---------------------------------------------------------------------------
+// 玻璃弹出菜单：与 Md3MenuPopup 同构（surface 底 / 4px 圆角 / hover 高亮 /
+// 选中对勾），但独立窗口抓不到背景快照，菜单体直接画半透磨砂底色，
+// 不参与玻璃折射（折射仅在宿主窗口内生效）。
+// ---------------------------------------------------------------------------
+class LiquidGlassMenuPopup : public QWidget
+{
+    Q_OBJECT
+
+public:
+    explicit LiquidGlassMenuPopup(LiquidGlassDropdown *owner);
+
+    void setTheme(const Md3Theme &theme);
+    void setItems(const QStringList &items);
+    void setSelectedIndex(int index);
+    QSize popupSize() const;
+
+signals:
+    void itemClicked(int index);
+    void closed();
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void leaveEvent(QEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
+
+private:
+    int itemAt(const QPoint &pos) const;
+
+    LiquidGlassDropdown *owner_ = nullptr;
+    Md3Theme theme_;
+    QStringList items_;
+    int selectedIndex_ = -1;
+    int hoverIndex_ = -1;
+};
+
+// ---------------------------------------------------------------------------
+// 玻璃输入框：几何/交互与 md3_text_field 一致（56 高 / 顶部圆角 4 / 底部
+// 指示线 / 前后缀图标），背景改为玻璃材质（折射窗口背景 + 主题着色）。
+// 内部 QLineEdit 透明叠加，聚焦驱动指示线渐变（150ms）。
+// ---------------------------------------------------------------------------
+class LiquidGlassTextField : public LiquidGlassThemeKeeper
+{
+    Q_OBJECT
+
+public:
+    explicit LiquidGlassTextField(const QString &placeholder = QString(),
+                                  QWidget *parent = nullptr);
+
+    void setTheme(const Md3Theme &theme);
+
+    QString text() const;
+    void setText(const QString &text);
+    void setPlaceholderText(const QString &placeholder);
+
+    // 前后缀图标：传入 std::nullopt 表示移除
+    void setLeadingIcon(std::optional<md3::Glyph> glyph);
+    void setTrailingIcon(std::optional<md3::Glyph> glyph);
+
+    // 后置图标点击回调
+    void setTrailingIconClicked(std::function<void()> callback);
+
+    QSize sizeHint() const override;
+
+signals:
+    void trailingIconClicked();
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void showEvent(QShowEvent *event) override;
+    void focusInEvent(QFocusEvent *event) override;
+    void focusOutEvent(QFocusEvent *event) override;
+
+private:
+    QRectF textFieldRect() const;
+
+    QLineEdit *editor_ = nullptr;
+    std::optional<md3::Glyph> leadingGlyph_;
+    std::optional<md3::Glyph> trailingGlyph_;
+    std::function<void()> trailingCallback_;
+    qreal focusProgress_ = 0.0;   // 聚焦过渡进度（驱动指示线渐变）
+    QVariantAnimation anim_;
+};
+
+// ---------------------------------------------------------------------------
+// 玻璃浮动按钮：几何与 md3_fab 一致（Regular 56x56 / Small 40x40，大号
+// 文字版暂不提供），圆形玻璃板 + 主题色 tint + 顶部高光，图标 on-primary。
+// 替代纯色胶囊：点击即 QAbstractButton 语义，直接复用 clicked() 信号。
+// ---------------------------------------------------------------------------
+class LiquidGlassFab : public LiquidGlassThemeKeeper
+{
+    Q_OBJECT
+
+public:
+    enum class Size {
+        Regular,   // 56x56，默认
+        Small      // 40x40，小 FAB
+    };
+    Q_ENUM(Size)
+
+    explicit LiquidGlassFab(md3::Glyph glyph = md3::Glyph::Plus,
+                            QWidget *parent = nullptr);
+
+    void setGlyph(md3::Glyph glyph);
+    void setSize(Size size);
+    void setTonal(bool tonal);   // true 用 secondary-container 色调
+
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override { return sizeHint(); }
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+    void enterEvent(QEnterEvent *event) override;
+    void leaveEvent(QEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void showEvent(QShowEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
+
+private:
+    qreal targetStateAlpha() const
+    {
+        return (hovered_ || isDown()) ? hkHoverAlpha : 0.0;
+    }
+
+    Md3Theme theme_;
+    md3::Glyph glyph_ = md3::Glyph::Plus;
+    Size size_ = Size::Regular;
+    bool tonal_ = false;
+    bool hovered_ = false;
+    qreal stateAlpha_ = 0.0;     // 状态层当前透明度（百分比）
+    QVariantAnimation stateAnim_;
+    static constexpr qreal hkHoverAlpha = 12.0;  // hover/按压状态层透明度
+};
+
+// ---------------------------------------------------------------------------
+// 玻璃下拉选择框：几何/交互与 md3_dropdown 一致（56 高 / 顶部圆角 4 /
+// 底部指示线 / 右侧下拉箭头），背景为玻璃材质。菜单用 LiquidGlassMenuPopup。
+// ---------------------------------------------------------------------------
+class LiquidGlassDropdown : public LiquidGlassThemeKeeper
+{
+    Q_OBJECT
+
+public:
+    explicit LiquidGlassDropdown(const QStringList &items = QStringList(),
+                                 const QString &placeholder = QString(),
+                                 QWidget *parent = nullptr);
+    ~LiquidGlassDropdown() override;
+
+    void setItems(const QStringList &items);
+    void setPlaceholderText(const QString &placeholder);
+
+    int currentIndex() const { return currentIndex_; }
+    void setCurrentIndex(int index);
+    QString currentText() const;
+
+    QSize sizeHint() const override;
+
+signals:
+    void currentIndexChanged(int index);
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void enterEvent(QEnterEvent *event) override;
+    void leaveEvent(QEvent *event) override;
+    void showEvent(QShowEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
+
+private:
+    void animateActive(bool active);
+    void showPopup();
+    void onItemClicked(int index);
+    void onPopupClosed();
+
+    Md3Theme theme_;
+    QStringList items_;
+    QString placeholder_;
+    int currentIndex_ = -1;
+    bool hovered_ = false;
+    bool menuOpen_ = false;
+    qreal activeProgress_ = 0.0;   // hover / 展开过渡进度，驱动指示线与箭头
+    QVariantAnimation anim_;
+    LiquidGlassMenuPopup *popup_ = nullptr;
 };

@@ -3,8 +3,7 @@
 #include <QWidget>
 #include <QVector>
 #include "md3_theme.h"
-
-class QPainter;
+#include "md3_icon.h"
 
 // MD3 侧边导航栏（Navigation Rail）：固定在窗口左侧的窄竖条。
 // 图标 + 标签的导航项，选中项以 primary-container 胶囊指示器高亮，
@@ -14,16 +13,8 @@ class Md3SideBar : public QWidget
     Q_OBJECT
 
 public:
-    // 内置线性图标，避免外部图标资源依赖
-    enum class Glyph {
-        Home,     // 首页
-        Search,   // 搜索
-        Star,     // 收藏
-        Person,   // 我的
-        Palette,  // 调色板
-        Drop,     // 水滴（液态玻璃）
-    };
-    Q_ENUM(Glyph)
+    // 图标枚举直接取公共图标库（md3_icon.h），避免私有副本漂移
+    using Glyph = md3::Glyph;
 
     explicit Md3SideBar(QWidget *parent = nullptr);
 
@@ -49,9 +40,6 @@ protected:
     void leaveEvent(QEvent *event) override;
 
 private:
-    // 在 (cx, cy) 处绘制指定线性图标（24x24 基准，居中于该点）
-    void paintGlyph(QPainter &p, Glyph glyph, qreal cx, qreal cy, const QColor &color) const;
-
     struct Item {
         QString label;
         Glyph glyph = Glyph::Home;

@@ -3,6 +3,7 @@
 #include <QAbstractButton>
 #include <QVariantAnimation>
 #include "md3_theme.h"
+#include "md3_icon.h"
 
 // MD3 按钮：覆盖 Filled / FilledTonal / Outlined / Text 四种规格。
 // 高度 40px，全圆角，带状态层（hover / 按下 / 聚焦）动效，支持禁用态。
@@ -24,6 +25,10 @@ public:
 
     void setStyle(Style style);
     void setTheme(const Md3Theme &theme);
+    // 前置图标：设置后在文本左侧 18x18 位置绘制线性图标
+    void setIcon(md3::Glyph glyph);
+    void setIconVisible(bool visible);
+    bool hasIcon() const { return iconVisible_; }
 
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
@@ -34,6 +39,8 @@ protected:
     void leaveEvent(QEvent *event) override;
     void focusInEvent(QFocusEvent *event) override;
     void focusOutEvent(QFocusEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
 
 private:
     // 计算当前应呈现的状态层透明度百分比（0~12），并驱动动画趋近
@@ -45,6 +52,8 @@ private:
 
     Md3Theme theme_;
     Style style_ = Style::Filled;
+    md3::Glyph glyph_ = md3::Glyph::Check;
+    bool iconVisible_ = false;
     bool hovered_ = false;
     bool focused_ = false;
     qreal stateAlpha_ = 0.0;   // 状态层当前透明度（0~12 的百分比值）

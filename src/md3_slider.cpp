@@ -66,6 +66,8 @@ void Md3Slider::setValue(int value)
     const qreal from = anim_.state() == QAbstractAnimation::Running ? displayValue_ : qreal(value_);
     value_ = value;
     anim_.stop();
+    // 复位时长：拖动分支可能把 anim_ 临时改短到 100ms，后续程序设值必须回到标准时长
+    anim_.setDuration(200);
     anim_.setStartValue(from);
     anim_.setEndValue(qreal(value_));
     anim_.start();

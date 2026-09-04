@@ -16,27 +16,12 @@
 #include <qmath.h>
 #include <QDateTime>
 #include <QTimer>
-#include <QFile>
-#include <QTextStream>
 
 #include <QLayout>  // grabBackdrop 抓帧前激活布局，避免 resize 期间抓到旧几何
 #include <cmath>
 #include <QDebug>  // 纹理上传 GL 错误输出（调试使用）
 
 namespace {
-
-// 诊断日志：Qt 的 stderr 消息在本机被静默（qWarning 0 字节输出），
-// 故统一追加写文件，运行时可用 /tmp/opencode/liquid_glass_diag.txt 查询
-void appendDiag(const QString &msg)
-{
-    QFile f("/tmp/opencode/liquid_glass_diag.txt");
-    if (!f.open(QIODevice::Append | QIODevice::Text)) {
-        return;
-    }
-    QTextStream ts(&f);
-    ts << QDateTime::currentDateTime().toString("HH:mm:ss.zzz")
-       << " " << msg << "\n";
-}
 
 // 玻璃面板顶点着色器：全屏四边形，vUV 为面板内归一化坐标(0~1)，
 // 后续材质计算全部以 vUV 为基础，与设备像素比、坐标原点无关。
@@ -50,21 +35,16 @@ void main() {
 }
 )";
 
-// 玻璃面板片段着色器：折射采样背景纹理 + 半透明着色 + 中心透光。
-// 折射采用「倒角弧面 + Snell 小角度近似」物理模型（参考 Apple Liquid Glass
-// 复刻实现与 OverShifted/LiquidGlass）：玻璃中央可以认为表面近似平坦
-// （几乎不折射），越靠近边缘玻璃面越陡，折射位移越强——采样点在边缘
-// 被推向外沿，中央内容保持稳定。整体是「倒角玻璃板」而非「凸透镜放大镜」。
+// 磨砂玻璃面板片段着色器：采样预模糊背景纹理 + 半透明着色。
+// 背景模糊在 CPU 侧完成（frostedBackdrop），纹理中就是磨砂素材；
+// 无折射变形、无中心透光——观感为 iOS 风格的磨砂玻璃。
 const char *kFragmentShader = R"(#version 330 core
 uniform sampler2D uBackdrop;
 uniform vec2  uBackdropSize;     // 窗口快照逻辑像素尺寸
 uniform vec2  uPanelPos;         // 面板左上角在快照中的逻辑坐标
 uniform vec2  uPanelSize;        // 面板逻辑像素尺寸
-uniform float uRefraction;       // 折射强度（边缘位移系数）
-uniform float uEdgeRefract;      // 边缘环带压边宽度比例（bevel/短边）
 uniform float uCorner;           // 圆角半径(px)
 uniform vec4  uTint;             // 半透明着色(rgba)
-uniform float uGlowAlpha;        // 中心透光强度
 in vec2 vUV;
 out vec4 fragColor;
 
@@ -94,46 +74,13 @@ void main() {
     const float aa = 1.0;
     float clipA = 1.0 - smoothstep(-aa, aa, sd);
 
-    // ---- 背景折射：倒角弧面 + Snell 近似(与软件版公式一致) ----
-    // 把面板当作一块边缘倒角的玻璃板：设定一个「玻璃曲率高度场」，
-    // 中央矮(接近平坦)、临近边缘的倒角带内快速升高。到边缘的归一化
-    // 距离 t（0=边缘、1=中心）即决定表面坡度 slope = 高度场对 t 的导数：
-    //   t 的矩形等值线（Chebyshev）保证上下/左右边缘的倒角宽度一致，
-    //   与玻璃面板真实观感（四条边、带圆角）贴合
-    vec2 n = (px - c) / halfS;                     // 椭圆归一化坐标
-    // 矩形归一化半径：两轴除以半尺寸后取较大分量(Chebyshev 距离)，
-    // 等值线为同心矩形而非椭圆。椭圆距离下同半径在宽/高两个方向
-    // 对应不同物理长度，折射压边强弱会随宽高比失真
-    float d = min(max(abs(n.x), abs(n.y)), 1.0);
-    float t = 1.0 - d;                              // 0=边缘、1=中心
-    // 倒角带外的中央区无需计算折射（表面平坦、无弯曲）
-    float bevel = uEdgeRefract;                     // 倒角带宽度（0~1）
-    float slope = 0.0;
-    if (t < bevel) {
-        // 圆形弧面高度场的坡度形状：h(t') = 1 - sqrt(1 - (1-t')^2)，
-        // 圆心处坡度 0、边缘处坡度→竖直（真实镜片弧面）；
-        // 对导数做钳制，避免 AA 半像素处斜率爆炸把采样点甩出边界
-        float tt = clamp(t / bevel, 0.0, 1.0);
-        float oneMinus = min(1.0 - tt, 0.93);
-        slope = oneMinus / max(sqrt(1.0 - oneMinus * oneMinus), 0.002);
-    }
-    // 折射位移方向：沿「从面板中心指向当前像素」的径向。边缘倒角带内
-    // 采样点朝面板中心偏移——透过玻璃边缘看到的背景内容被弯曲向内部，
-    // 这是 Apple 复刻实现的主流方向（"warp inward at the edges"）。
-    // 位移量 = 坡度 * (1 - 1/IOR) * 折射系数（IOR=1.5 玻璃）
-    vec2 dir = n / max(length(n), 0.0012);          // 归一化径向
-    float bend = slope * (1.0 - 1.0 / 1.5) * uRefraction;
-    vec2 src = c + (n - dir * bend) * halfS + uPanelPos;   // 折射反演回窗口坐标
+    // ---- 背景采样：纹理为预模糊快照（磨砂素材），无折射偏移 ----
+    vec2 src = px + uPanelPos;          // 像素直接映射回窗口坐标
     vec2 uv = src / uBackdropSize;
-
     vec3 col = texture(uBackdrop, uv).rgb;
 
     // ---- 半透明着色：暗玻璃压黑、亮玻璃压白 ----
     col = mix(col, uTint.rgb, uTint.a);
-
-    // ---- 中心透光：径向渐变提亮，位置/尺度与软件版一致 ----
-    float gd = length((vUV - vec2(0.5, 0.42)) * (uPanelSize / (min(uPanelSize.x, uPanelSize.y) * 0.62)));
-    col += vec3(uGlowAlpha * pow(clamp(1.0 - gd, 0.0, 1.0), 2.0));
 
     // 输出预乘 alpha：RGB 必须乘 clipA。否则边缘半透明像素的红/绿/蓝
     // 保持不饱和满值，合成到背景时白色溢出成 1px 锯齿边+彩色杂点
@@ -249,9 +196,6 @@ LiquidGlassPanel::LiquidGlassPanel(QWidget *parent)
     // Widgets 的平台 EGL 集成（参考 OverShifted/LiquidGlass 架构）。
     if (!isGlAvailable()) {
         glOk_ = false;
-        appendDiag("GL unavailable -> CPU path");
-    } else {
-        appendDiag("GL available -> GPU path");
     }
 }
 
@@ -368,14 +312,14 @@ void LiquidGlassPanel::renderGlFrame()
     // 纹理由窗口快照填充：只在快照更新后上传一次，避免每帧重复传输。
     // 用原生 GL 命令上传（glPixelStorei 显式声明行距与对齐），
     // QOpenGLTexture 高层封装在此场景行为不可靠（采样得到空纹理）
-    if (backdropDirty_ && !backdrop_.isNull()) {
+    if (backdropDirty_ && !frosted_.isNull()) {
         const GLuint texId = bgTexture_.textureId();
         glBindTexture(GL_TEXTURE_2D, texId);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, backdrop_.bytesPerLine() / 4);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, frosted_.bytesPerLine() / 4);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
-                     backdrop_.width(), backdrop_.height(), 0,
-                     GL_RGBA, GL_UNSIGNED_BYTE, backdrop_.constBits());
+                     frosted_.width(), frosted_.height(), 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, frosted_.constBits());
         glBindTexture(GL_TEXTURE_2D, 0);
         hasTexture_ = true;
         backdropDirty_ = false;
@@ -425,26 +369,25 @@ void LiquidGlassPanel::renderGlFrame()
         glFrame_ = QImage();
         return;
     }
-        program_.bind();
-        program_.setUniformValue("uBackdrop", 0);
-        program_.setUniformValue("uBackdropSize", QVector2D(backdrop_.width(), backdrop_.height()));
-        program_.setUniformValue("uPanelPos", QVector2D(pos.x(), pos.y()));
-        program_.setUniformValue("uPanelSize", QVector2D(sz.width(), sz.height()));
-        program_.setUniformValue("uRefraction", float(refractionK_));
-        program_.setUniformValue("uEdgeRefract", float(edgeRefractK_));
-        program_.setUniformValue("uCorner", float(cornerRadius_));
-        program_.setUniformValue("uTint", dark_
-            ? QVector4D(0.0f, 0.0f, 0.0f, 52.0f / 255.0f)
-            : QVector4D(1.0f, 1.0f, 1.0f, 72.0f / 255.0f));
-        program_.setUniformValue("uGlowAlpha", dark_ ? 34.0f / 255.0f : 52.0f / 255.0f);
+    program_.bind();
+    program_.setUniformValue("uBackdrop", 0);
+    program_.setUniformValue("uBackdropSize", QVector2D(frosted_.width(), frosted_.height()));
+    program_.setUniformValue("uPanelPos", QVector2D(pos.x(), pos.y()));
+    program_.setUniformValue("uPanelSize", QVector2D(sz.width(), sz.height()));
+    program_.setUniformValue("uCorner", float(cornerRadius_));
+    // tint 与 CPU 版保持严格一致：暗压黑、亮压白（同
+    // renderSoftwareFrame/renderGlassPlateCPU 值）
+    program_.setUniformValue("uTint", dark_
+        ? QVector4D(0.0f, 0.0f, 0.0f, 52.0f / 255.0f)
+        : QVector4D(1.0f, 1.0f, 1.0f, 36.0f / 255.0f));
 
-        glActiveTexture(GL_TEXTURE0);
-        bgTexture_.bind();
-        vao_.bind();
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        vao_.release();
-        bgTexture_.release();
-        program_.release();
+    glActiveTexture(GL_TEXTURE0);
+    bgTexture_.bind();
+    vao_.bind();
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    vao_.release();
+    bgTexture_.release();
+    program_.release();
 
     fbo_->release();
 
@@ -456,9 +399,6 @@ void LiquidGlassPanel::renderGlFrame()
     // 将其标记为 Premultiplied；QPainter 混读该标定会把 AA 半透明像素算偏
     // （弧线外缘黄/黑杂点）。显式转为非预乘格式，语义与内容一致。
     glFrame_ = fbo_->toImage().convertToFormat(QImage::Format_ARGB32);
-    if (qEnvironmentVariableIsSet("MD3_GL_FRAME_DEBUG")) {
-        glFrame_.save("/tmp/opencode/glframe_dump.png");
-    }
     glContext_.doneCurrent();
 }
 
@@ -518,11 +458,11 @@ void LiquidGlassPanel::grabBackdrop()
     }
     const QImage snap = grabGlassBackdrop(this, w);
     backdrop_ = snap;
+    // 磨砂素材：模糊强度由 refractionK_ 映射（0.10 → 20px），
+    // 修改变量即实时改变磨砂强弱
+    const int radius = qBound(4, qRound(refractionK_ * 200.0), 96);
+    frosted_ = frostedBackdrop(backdrop_, radius);
     backdropWinSize_ = w->size();   // 记录快照时的窗口几何，用于失效检测
-    if (qEnvironmentVariableIsSet("MD3_BACKDROP_DEBUG")) {
-        backdrop_.save(QString("/tmp/opencode/bd_%1_%2.png")
-                           .arg(w->width()).arg(w->height()));
-    }
     backdropDirty_ = true;
     lastGrabbedMs_ = QDateTime::currentMSecsSinceEpoch();
     update();
@@ -580,33 +520,7 @@ void LiquidGlassPanel::paintEvent(QPaintEvent *event)
     }
 
     QPainter p(this);
-    if (qEnvironmentVariableIsSet("MD3_GL_FRAME_FINAL")) {
-        QFile dbgPre("/tmp/opencode/pre.txt");
-        if (dbgPre.open(QIODevice::Append | QIODevice::Text)) {
-            QTextStream tsPre(&dbgPre);
-            tsPre << "PRE frame=" << glFrame_.size().width() << "x" << glFrame_.size().height()
-                  << " c0,300=" << glFrame_.pixelColor(0, 300).name() << glFrame_.pixelColor(0, 300).alpha()
-                  << " c2,300=" << glFrame_.pixelColor(2, 300).name() << glFrame_.pixelColor(2, 300).alpha()
-                  << "\n";
-            dbgPre.close();
-        }
-    }
     p.drawImage(0, 0, glFrame_);
-    // 最终上屏帧 dump：与 drawImage 完全同一对象
-    if (qEnvironmentVariableIsSet("MD3_GL_FRAME_FINAL")) {
-        glFrame_.save("/tmp/opencode/glframe_final.png");
-        QFile dbg("/tmp/opencode/paint_samples.txt");
-        if (dbg.open(QIODevice::Append | QIODevice::Text)) {
-            QTextStream ts(&dbg);
-            const QPoint pw = mapTo(window(), QPoint(0, 0));
-            ts << "PAINT frame=" << glFrame_.size().width() << "x" << glFrame_.size().height()
-               << " pos=" << pw.x() << "," << pw.y()
-               << " c0,300=" << glFrame_.pixelColor(0, 300).name() << glFrame_.pixelColor(0, 300).alpha()
-               << " c2,300=" << glFrame_.pixelColor(2, 300).name() << glFrame_.pixelColor(2, 300).alpha()
-               << " ok=" << glOk_ << "\n";
-            dbg.close();
-        }
-    }
 }
 
 // 软件降级绘制：与片段着色器逐项等价的 CPU 管线，产物写入 glFrame_
@@ -628,7 +542,7 @@ void LiquidGlassPanel::renderSoftwareFrame()
     // 窗口几何已变：快照反映的是旧布局（控件位置/文字与当前不符），
     // 必须重抓。与取景区越界同样视为素材失效
     const bool stale = w && backdropWinSize_.isValid() && (w->size() != backdropWinSize_);
-    const bool haveSrc = !backdrop_.isNull() && backdrop_.rect().contains(panelRect) && !stale;
+    const bool haveSrc = !frosted_.isNull() && frosted_.rect().contains(panelRect) && !stale;
 
     // show/resize 竞态兜底：窗口在首次抓帧后又被放大（面板矩形溢出快照），
     // 下一帧采样全部越界会导致整板纯黑。paint 循环内不能同步抓帧
@@ -641,25 +555,23 @@ void LiquidGlassPanel::renderSoftwareFrame()
     const qreal cx = W * 0.5, cy = H * 0.5;
     const qreal hx = W * 0.5, hy = H * 0.5;
 
-    // 与 shader uniform 保持一致的材质参数
+    // 与 shader uniform 保持一致的材质参数（磨砂版无折射/透光，仅 tint）
     const qreal tintR = dark_ ? 0.0 : 255.0;
-    const qreal tintA = (dark_ ? 52 : 72) / 255.0;
-    const qreal glowA = (dark_ ? 34 : 52) / 255.0;
-    const qreal glowScale = qMin(W, H) * 0.62;
-    const qreal glowCy = H * 0.42;
-    const qreal k = refractionK_;
+    const qreal tintG = tintR;   // tint 为同灰度分量（暗压黑/亮压白）
+    const qreal tintB = tintR;
+    const qreal tintA = (dark_ ? 52 : 36) / 255.0;   // 亮色 36：磨砂感保留，但防止压白成一整片亮灰
     const qreal corner = cornerRadius_;
 
-    // 快捷 lambda：读取 backdrop_ 中窗口坐标 (sx, sy) 处的双线性 RGB
+    // 快捷 lambda：读取 frosted_ 中窗口坐标 (sx, sy) 处的双线性 RGB
     auto sampleAt = [&](qreal sx, qreal sy, qreal &r, qreal &g, qreal &b) {
-        sx = qBound(0.0, sx, qreal(backdrop_.width() - 2));
-        sy = qBound(0.0, sy, qreal(backdrop_.height() - 2));
+        sx = qBound(0.0, sx, qreal(frosted_.width() - 2));
+        sy = qBound(0.0, sy, qreal(frosted_.height() - 2));
         const int x0 = int(sx);
         const int y0 = int(sy);
         const qreal fx = sx - x0;
         const qreal fy = sy - y0;
-        const uchar *row0 = backdrop_.constScanLine(y0) + x0 * 4;
-        const uchar *row1 = backdrop_.constScanLine(y0 + 1) + x0 * 4;
+        const uchar *row0 = frosted_.constScanLine(y0) + x0 * 4;
+        const uchar *row1 = frosted_.constScanLine(y0 + 1) + x0 * 4;
         r = 0; g = 0; b = 0;
         for (int ch = 0; ch < 3; ++ch) {
             const qreal c00 = row0[ch];
@@ -676,10 +588,7 @@ void LiquidGlassPanel::renderSoftwareFrame()
     QImage out(W, H, QImage::Format_ARGB32);
     for (int y = 0; y < H; ++y) {
         QRgb *line = reinterpret_cast<QRgb *>(out.scanLine(y));
-        const qreal v = qreal(y) / H;
         for (int x = 0; x < W; ++x) {
-            const qreal u = qreal(x) / W;
-
             // 圆角 SDF：与 shader sdRoundRect 一致（qAbs + 距离组装）
             const qreal qx = qAbs(x - cx) - hx + corner;
             const qreal qy = qAbs(y - cy) - hy + corner;
@@ -691,44 +600,19 @@ void LiquidGlassPanel::renderSoftwareFrame()
             // 单边窗口在弧线切线处会留下可见锯齿（真机 3009 降级 CPU 版主诉）
             const qreal clipA = 1.0 - smoothstep01(sd, -1.0, 1.0);
 
-            // 折射反查：倒角弧面 + Snell 近似(与 shader 同公式)。
-            // 中央平坦无弯曲（slope=0），倒角带内采样点朝面板中心偏移
-            const qreal nx = (x - cx) / hx;
-            const qreal ny = (y - cy) / hy;
-            const qreal d = qMin(qMax(qAbs(nx), qAbs(ny)), 1.0);
-            const qreal t = 1.0 - d;                 // 0=边缘、1=中心
-            const qreal bevel = edgeRefractK_;       // 倒角带宽(0~1)
-            qreal slope = 0.0;
-            if (t < bevel) {
-                const qreal tt = qBound(0.0, t / bevel, 1.0);
-                const qreal oneMinus = qMin(1.0 - tt, 0.93);
-                slope = oneMinus / qMax(std::sqrt(1.0 - oneMinus * oneMinus), 0.002);
-            }
-            const qreal len = std::sqrt(nx * nx + ny * ny);
-            const qreal dirx = len > 0.0012 ? nx / len : 0.0;
-            const qreal diry = len > 0.0012 ? ny / len : 0.0;
-            const qreal bend = slope * (1.0 - 1.0 / 1.5) * k;
-            const qreal sx = cx + (nx - dirx * bend) * hx + pos.x();
-            const qreal sy = cy + (ny - diry * bend) * hy + pos.y();
+            // 磨砂采样：无折射偏移，像素直接映射回窗口坐标采样预模糊图
+            const qreal sx = x + pos.x();
+            const qreal sy = y + pos.y();
 
             qreal cr = 0, cg = 0, cb = 0;
             if (haveSrc) {
                 sampleAt(sx, sy, cr, cg, cb);
             }
 
-            // tint 混合：暗玻璃压黑、亮玻璃压白
+            // tint 混合：暗玻璃压黑、亮玻璃压白（与 GL shader mix 逐分量一致）
             cr = cr + (tintR - cr) * tintA;
-            cg = cg + (tintR - cg) * tintA;
-            cb = cb + (tintR - cb) * tintA;
-
-            // 中心透光：径向提亮（中心 (0.5, 0.42)，尺度 min*0.62）
-            const qreal gdx = (x - cx) / glowScale;
-            const qreal gdy = (y - glowCy) / glowScale;
-            const qreal gd = std::sqrt(gdx * gdx + gdy * gdy);
-            const qreal g = qBound(0.0, 1.0 - gd, 1.0);
-            cr += glowA * g * g * 255.0;
-            cg += glowA * g * g * 255.0;
-            cb += glowA * g * g * 255.0;
+            cg = cg + (tintG - cg) * tintA;
+            cb = cb + (tintB - cb) * tintA;
 
             const int ar = qBound(0, int(cr + 0.5), 255);
             const int ag = qBound(0, int(cg + 0.5), 255);
@@ -916,12 +800,102 @@ QImage grabGlassBackdrop(const QWidget *self, QWidget *w)
     return snap.toImage().convertToFormat(QImage::Format_RGBA8888);
 }
 
-// 纯 CPU 玻璃板渲染：与 LiquidGlassPanel::renderSoftwareFrame 同公式，
-// 但参数化（corner / k / edgeK / dark / glowMul），panelRect 提供窗口坐标基线。
+// 两遍滑动窗口盒式模糊（水平 + 垂直，radius 为每侧半径）。
+// 滑动和让每个输出像素摊薄为 O(1)：先水平累计、再垂直累计。
+// 边界 clamp 到最近像素；RGBA8888 四通道一并模糊（快照全不透明，
+// alpha 通道仅作形式保留）。磨砂玻璃的「低通后透出底色」即来源于此。
+QImage frostedBackdrop(const QImage &src, int radius)
+{
+    if (src.isNull() || radius <= 0) {
+        return src;
+    }
+    const int W = src.width();
+    const int H = src.height();
+    // 半径钳制到短边一半以内：保证滑动窗口内始终有 win 个真实元素
+    const int R = qBound(1, radius, qMin(W, H) / 2 - 1);
+    const int win = R * 2 + 1;
+
+    QImage tmp(W, H, QImage::Format_RGBA8888);   // 水平模糊中间结果
+    QImage out(W, H, QImage::Format_RGBA8888);
+
+    // 水平 pass
+    for (int y = 0; y < H; ++y) {
+        const uchar *row = src.constScanLine(y);
+        uchar *dst = tmp.scanLine(y);
+        int s[4] = {0, 0, 0, 0};
+        // 初始窗口：x∈[-r, r] clamp 到 0
+        for (int x0 = 0; x0 <= R; ++x0) {
+            const uchar *p = row + (x0 < W ? x0 : W - 1) * 4;
+            for (int ch = 0; ch < 4; ++ch) {
+                s[ch] += p[ch];
+            }
+        }
+        for (int x = 0; x < W; ++x) {
+            dst[x * 4 + 0] = uchar(s[0] / win);
+            dst[x * 4 + 1] = uchar(s[1] / win);
+            dst[x * 4 + 2] = uchar(s[2] / win);
+            dst[x * 4 + 3] = uchar(s[3] / win);
+            const int xin = x + R + 1;             // 进入窗口的列
+            const int xout = x - R;                // 离开窗口的列
+            if (xin < W) {
+                const uchar *p = row + xin * 4;
+                for (int ch = 0; ch < 4; ++ch) {
+                    s[ch] += p[ch];
+                }
+            }
+            if (xout >= 0) {
+                const uchar *p = row + xout * 4;
+                for (int ch = 0; ch < 4; ++ch) {
+                    s[ch] -= p[ch];
+                }
+            }
+        }
+    }
+
+    // 垂直 pass（注意 clamp 边界：窗口行超界则取边缘行）
+    for (int x = 0; x < W; ++x) {
+        int s[4] = {0, 0, 0, 0};
+        for (int y0 = 0; y0 <= R; ++y0) {
+            const uchar *p = tmp.constScanLine(y0 < H ? y0 : H - 1) + x * 4;
+            for (int ch = 0; ch < 4; ++ch) {
+                s[ch] += p[ch];
+            }
+        }
+        for (int y = 0; y < H; ++y) {
+            uchar *dst = out.scanLine(y) + x * 4;
+            dst[0] = uchar(s[0] / win);
+            dst[1] = uchar(s[1] / win);
+            dst[2] = uchar(s[2] / win);
+            dst[3] = uchar(s[3] / win);
+            const int yin = y + R + 1;
+            const int yout = y - R;
+            if (yin < H) {
+                const uchar *p = tmp.constScanLine(yin) + x * 4;
+                for (int ch = 0; ch < 4; ++ch) {
+                    s[ch] += p[ch];
+                }
+            }
+            if (yout >= 0) {
+                const uchar *p = tmp.constScanLine(yout) + x * 4;
+                for (int ch = 0; ch < 4; ++ch) {
+                    s[ch] -= p[ch];
+                }
+            }
+        }
+    }
+    return out;
+}
+
+// 纯 CPU 磨砂板渲染：与 LiquidGlassPanel::renderSoftwareFrame 同公式，
+// 参数化（corner / dark），panelRect 提供窗口坐标基线。k / edgeK / glowMul
+// 为磨砂版弃用参数（保留兼容旧调用）。
 QImage renderGlassPlateCPU(const QImage &backdrop, const QRect &panelRect,
                            const QSize &size, qreal corner, qreal k, qreal edgeK,
                            bool dark, qreal glowMul)
 {
+    Q_UNUSED(k)
+    Q_UNUSED(edgeK)
+    Q_UNUSED(glowMul)
     const int W = size.width();
     const int H = size.height();
     if (W <= 0 || H <= 0) {
@@ -935,10 +909,9 @@ QImage renderGlassPlateCPU(const QImage &backdrop, const QRect &panelRect,
     const qreal hx = W * 0.5, hy = H * 0.5;
 
     const qreal tintR = dark ? 0.0 : 255.0;
-    const qreal tintA = (dark ? 52 : 72) / 255.0;
-    const qreal glowA = (dark ? 34 : 52) / 255.0 * glowMul;
-    const qreal glowScale = qMin(W, H) * 0.62;
-    const qreal glowCy = H * 0.42;
+    const qreal tintG = tintR;   // tint 为同灰度分量（暗压黑/亮压白）
+    const qreal tintB = tintR;
+    const qreal tintA = (dark ? 52 : 36) / 255.0;   // 亮色 36：同面板，防止玻璃压白过强
 
     auto sampleAt = [&](qreal sx, qreal sy, qreal &r, qreal &g, qreal &b) {
         sx = qBound(0.0, sx, qreal(backdrop.width() - 2));
@@ -975,42 +948,19 @@ QImage renderGlassPlateCPU(const QImage &backdrop, const QRect &panelRect,
                              + qMin(qMax(qx, qy), 0.0) - corner;
             const qreal clipA = 1.0 - smoothstep01(sd, -1.0, 1.0);
 
-            // 倒角弧面折射反查（与 shader 同公式）
-            const qreal nx = (x - cx) / hx;
-            const qreal ny = (y - cy) / hy;
-            const qreal d = qMin(qMax(qAbs(nx), qAbs(ny)), 1.0);
-            const qreal t = 1.0 - d;
-            qreal slope = 0.0;
-            if (t < edgeK) {
-                const qreal tt = qBound(0.0, t / edgeK, 1.0);
-                const qreal oneMinus = qMin(1.0 - tt, 0.93);
-                slope = oneMinus / qMax(std::sqrt(1.0 - oneMinus * oneMinus), 0.002);
-            }
-            const qreal len = std::sqrt(nx * nx + ny * ny);
-            const qreal dirx = len > 0.0012 ? nx / len : 0.0;
-            const qreal diry = len > 0.0012 ? ny / len : 0.0;
-            const qreal bend = slope * (1.0 - 1.0 / 1.5) * k;
-            const qreal sx = cx + (nx - dirx * bend) * hx + pos.x();
-            const qreal sy = cy + (ny - diry * bend) * hy + pos.y();
+            // 磨砂采样：无折射偏移，像素直接映射回窗口坐标采样预模糊图
+            const qreal sx = x + pos.x();
+            const qreal sy = y + pos.y();
 
             qreal cr = 0, cg = 0, cb = 0;
             if (haveSrc) {
                 sampleAt(sx, sy, cr, cg, cb);
             }
 
-            // tint 混合
+            // tint 混合（逐分量，与 shader mix 一致）
             cr = cr + (tintR - cr) * tintA;
-            cg = cg + (tintR - cg) * tintA;
-            cb = cb + (tintR - cb) * tintA;
-
-            // 中心透光
-            const qreal gdx = (x - cx) / glowScale;
-            const qreal gdy = (y - glowCy) / glowScale;
-            const qreal gd = std::sqrt(gdx * gdx + gdy * gdy);
-            const qreal g = qBound(0.0, 1.0 - gd, 1.0);
-            cr += glowA * g * g * 255.0;
-            cg += glowA * g * g * 255.0;
-            cb += glowA * g * g * 255.0;
+            cg = cg + (tintG - cg) * tintA;
+            cb = cb + (tintB - cb) * tintA;
 
             const int ar = qBound(0, int(cr + 0.5), 255);
             const int ag = qBound(0, int(cg + 0.5), 255);

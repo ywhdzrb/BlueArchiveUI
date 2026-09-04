@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(liquid_kit LANGUAGES CXX)
+project(blue_archive_ui LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -16,8 +16,9 @@ file(GLOB MCU_SOURCES CONFIGURE_DEPENDS
     third_party/material_color_utilities/cpp/*/*.cc
 )
 
-set(LIQUID_KIT_SOURCES
+set(BLUE_ARCHIVE_UI_SOURCES
     src/md3_theme.cpp
+    src/md3_icon.cpp
     src/md3_button.cpp
     src/md3_card.cpp
     src/md3_switch.cpp
@@ -26,30 +27,37 @@ set(LIQUID_KIT_SOURCES
     src/md3_slider.cpp
     src/md3_dropdown.cpp
     src/md3_side_bar.cpp
+    src/md3_fab.cpp
+    src/md3_badge.cpp
+    src/md3_chip.cpp
+    src/md3_check_box.cpp
+    src/md3_radio_button.cpp
+    src/md3_segmented_button.cpp
+    src/md3_dialog.cpp
     src/monet_theme.cpp
     src/liquid_glass.cpp
     src/liquid_glass_widgets.cpp
     ${MCU_SOURCES}
 )
 
-add_library(liquid_kit STATIC ${LIQUID_KIT_SOURCES})
+add_library(blue_archive_ui STATIC ${BLUE_ARCHIVE_UI_SOURCES})
 
-target_include_directories(liquid_kit
+target_include_directories(blue_archive_ui
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/material_color_utilities
 )
 
-target_link_libraries(liquid_kit PUBLIC Qt6::Widgets Qt6::OpenGL)
+target_link_libraries(blue_archive_ui PUBLIC Qt6::Widgets Qt6::OpenGL)
 
 # 示例：默认构建（install 时或 DM 关闭）
-option(LIQUID_KIT_BUILD_EXAMPLES "构建 liquid_kit 示例程序" ON)
-if(LIQUID_KIT_BUILD_EXAMPLES)
-    add_executable(liquid_kit_minimal examples/minimal.cpp)
-    target_link_libraries(liquid_kit_minimal PRIVATE liquid_kit)
+option(BLUE_ARCHIVE_UI_BUILD_EXAMPLES "构建 blue_archive_ui 示例程序" ON)
+if(BLUE_ARCHIVE_UI_BUILD_EXAMPLES)
+    add_executable(blue_archive_ui_minimal examples/minimal.cpp)
+    target_link_libraries(blue_archive_ui_minimal PRIVATE blue_archive_ui)
 endif()
 
-install(TARGETS liquid_kit
+install(TARGETS blue_archive_ui
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION bin

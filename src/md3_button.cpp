@@ -1,13 +1,16 @@
 #include "md3_button.h"
 #include "md3_theme.h"
+#include "md3_icon.h"
 
 #include <QPainter>
 #include <QEnterEvent>
+#include <QMouseEvent>
 
 namespace {
 // 控件外观常量（像素），取自 MD3 按钮规范
 constexpr int kHeight = 40;
 constexpr int kPaddingX = 24;
+constexpr qreal kIconGap = 8;     // 图标与文本间距
 constexpr qreal kHoverAlpha = 8.0;   // hover 状态层透明度
 constexpr qreal kPressAlpha = 12.0;  // 按下状态层透明度
 constexpr qreal kFocusAlpha = 10.0;  // 聚焦状态层透明度
@@ -54,10 +57,28 @@ void Md3Button::setTheme(const Md3Theme &theme)
     update();
 }
 
+// 设置前置图标（默认开启显示）
+void Md3Button::setIcon(md3::Glyph glyph)
+{
+    glyph_ = glyph;
+    iconVisible_ = true;
+    updateGeometry();
+    update();
+}
+
+void Md3Button::setIconVisible(bool visible)
+{
+    iconVisible_ = visible;
+    updateGeometry();
+    update();
+}
+
 QSize Md3Button::sizeHint() const
 {
-    // 宽度 = 文本宽 + 两侧内边距，高度固定 40px
-    return QSize(fontMetrics().horizontalAdvance(text()) + 2 * kPaddingX, kHeight);
+    // 宽度 = 图标（含间距） + 文本宽 + 两侧内边距，高度固定 40px
+    const qreal extra = iconVisible_ ? 18.0 + kIconGap : 0.0;
+    return QSize(static_cast<int>(fontMetrics().horizontalAdvance(text()) + extra + 2 * kPaddingX),
+                 kHeight);
 }
 
 QSize Md3Button::minimumSizeHint() const
@@ -171,10 +192,20 @@ void Md3Button::paintEvent(QPaintEvent *event)
         p.drawRoundedRect(r, kHeight / 2.0, kHeight / 2.0);
     }
 
-    // 文字（禁用态用 38% on-surface）
+    // 文字（禁用态用 38% on-surface）。有图标时留出左侧图标 + 间距
     p.setPen(disabled ? theme_.disabledContent() : contentColor());
     p.setFont(font());
-    p.drawText(rect(), Qt::AlignCenter, text());
+    if (iconVisible_) {
+        const qreal textWidth = fontMetrics().horizontalAdvance(text());
+        const qreal total = 18.0 + kIconGap + textWidth;
+        const qreal startX = (width() - total) / 2.0;
+        md3::paintGlyph(p, glyph_, startX + 9.0, height() / 2.0,
+                        disabled ? theme_.disabledContent() : contentColor(), 2.0);
+        p.drawText(QRectF(startX + 18.0 + kIconGap, 0, textWidth + kPaddingX, height()),
+                   Qt::AlignVCenter, text());
+    } else {
+        p.drawText(rect(), Qt::AlignCenter, text());
+    }
 }
 
 void Md3Button::enterEvent(QEnterEvent *event)
@@ -191,6 +222,28 @@ void Md3Button::leaveEvent(QEvent *event)
 {
     Q_UNUSED(event)
     hovered_ = false;
+    stateAnim_.stop();
+    stateAnim_.setStartValue(stateAlpha_);
+    stateAnim_.setEndValue(targetStateAlpha());
+    stateAnim_.start();
+}
+
+// 按下时状态层立即抬升到 press 档（isDown() 由基类更新，随后驱动动画）
+void Md3Button::mousePressEvent(QMouseEvent *event)
+{
+    QAbstractButton::mousePressEvent(event);
+    if (isDown()) {
+        stateAnim_.stop();
+        stateAnim_.setStartValue(stateAlpha_);
+        stateAnim_.setEndValue(targetStateAlpha());
+        stateAnim_.start();
+    }
+}
+
+// 松开后回落到 hover / 无状态档
+void Md3Button::mouseReleaseEvent(QMouseEvent *event)
+{
+    QAbstractButton::mouseReleaseEvent(event);
     stateAnim_.stop();
     stateAnim_.setStartValue(stateAlpha_);
     stateAnim_.setEndValue(targetStateAlpha());

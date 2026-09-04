@@ -196,6 +196,13 @@ Md3Dropdown::Md3Dropdown(const QStringList &items, const QString &placeholder, Q
     connect(popup_, &Md3MenuPopup::closed, this, &Md3Dropdown::onPopupClosed);
 }
 
+// 弹出菜单是 Qt::Popup 顶层窗口（构造时忽略父指针），
+// 必须随宿主显式释放，否则每次构造泄漏一个窗口且宿主销毁后残留屏幕
+Md3Dropdown::~Md3Dropdown()
+{
+    delete popup_;
+}
+
 // 切换主题并同步弹出菜单
 void Md3Dropdown::setTheme(const Md3Theme &theme)
 {

@@ -1,6 +1,6 @@
 # BlueArchiveUI
 
-<img src="assets/logo/BlueArchive-UI_symbolon.png" width="256" alt="BlueArchiveUI logo">
+<img src="assets/logo/BlueArchive-UI_symbolon.png" width="360" alt="BlueArchiveUI logo">
 
 模仿游戏《Blue Archive》（蔚蓝档案）界面风格的 **Qt6 Widgets 组件库**。
 

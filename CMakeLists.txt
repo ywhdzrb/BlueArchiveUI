@@ -37,6 +37,30 @@ set(BLUE_ARCHIVE_UI_SOURCES
     src/monet_theme.cpp
     src/liquid_glass.cpp
     src/liquid_glass_widgets.cpp
+    src/ba_style.cpp
+    src/ba_icon.cpp
+    src/ba_button.cpp
+    src/ba_slider.cpp
+    src/ba_check_box.cpp
+    src/ba_progress_bar.cpp
+    src/ba_section_header.cpp
+    src/ba_top_bar.cpp
+    src/ba_tab_column.cpp
+    src/ba_dialog.cpp
+    src/ba_background.cpp
+    src/ba_panel.cpp
+    src/ba_chip.cpp
+    src/ba_assets.cpp
+    src/ba_navigation_bar.cpp
+    src/ba_page_tabs.cpp
+    src/ba_bounty_card.cpp
+    src/ba_shop_menu_block.cpp
+    src/ba_voice_bubble.cpp
+    src/ba_mission_card.cpp
+    src/ba_info_card.cpp
+    src/ba_player_card.cpp
+    src/ba_card.cpp
+    src/ba_spark.cpp
     ${MCU_SOURCES}
 )
 
@@ -55,6 +79,39 @@ option(BLUE_ARCHIVE_UI_BUILD_EXAMPLES "构建 blue_archive_ui 示例程序" ON)
 if(BLUE_ARCHIVE_UI_BUILD_EXAMPLES)
     add_executable(blue_archive_ui_minimal examples/minimal.cpp)
     target_link_libraries(blue_archive_ui_minimal PRIVATE blue_archive_ui)
+
+    add_executable(blue_archive_ui_ba_demo examples/ba_demo.cpp)
+    target_link_libraries(blue_archive_ui_ba_demo PRIVATE blue_archive_ui)
+
+    add_executable(blue_archive_ui_button_demo examples/ba_button_demo.cpp)
+    target_link_libraries(blue_archive_ui_button_demo PRIVATE blue_archive_ui)
+
+    add_executable(blue_archive_ui_progress_demo examples/ba_progress_demo.cpp)
+    target_link_libraries(blue_archive_ui_progress_demo PRIVATE blue_archive_ui)
+
+    add_executable(blue_archive_ui_info_demo examples/ba_info_card_demo.cpp)
+    target_link_libraries(blue_archive_ui_info_demo PRIVATE blue_archive_ui)
+
+    add_executable(blue_archive_ui_card_demo examples/ba_card_demo.cpp)
+    target_link_libraries(blue_archive_ui_card_demo PRIVATE blue_archive_ui)
+
+    add_executable(blue_archive_ui_slider_demo examples/ba_slider_demo.cpp)
+    target_link_libraries(blue_archive_ui_slider_demo PRIVATE blue_archive_ui)
+
+    add_executable(blue_archive_ui_options_demo examples/ba_options_demo.cpp)
+    target_link_libraries(blue_archive_ui_options_demo PRIVATE blue_archive_ui)
+
+    add_executable(blue_archive_ui_all_demo examples/ba_all_demo.cpp)
+    target_link_libraries(blue_archive_ui_all_demo PRIVATE blue_archive_ui)
+
+    add_executable(blue_archive_ui_spark_demo examples/ba_spark_demo.cpp)
+    target_link_libraries(blue_archive_ui_spark_demo PRIVATE blue_archive_ui)
+
+    add_executable(blue_archive_ui_topbar_demo examples/ba_top_bar_demo.cpp)
+    target_link_libraries(blue_archive_ui_topbar_demo PRIVATE blue_archive_ui)
+
+    add_executable(blue_archive_ui_integrated_demo examples/ba_integrated_demo.cpp)
+    target_link_libraries(blue_archive_ui_integrated_demo PRIVATE blue_archive_ui)
 endif()
 
 install(TARGETS blue_archive_ui

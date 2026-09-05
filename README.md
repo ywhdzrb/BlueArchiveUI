@@ -1,169 +1,109 @@
 # BlueArchiveUI
 
-**Material Design 3 + 液态玻璃（Liquid Glass / iOS 26 风格）Qt6 Widgets 控件框架**。
+模仿游戏《Blue Archive》（蔚蓝档案）界面风格的 **Qt6 Widgets 组件库**。
 
-- **主题层**：Material Design 3 色彩系统（亮/暗两套）+ Material You「莫奈」动态取色（Google material-color-utilities 官方实现）
-- **MD3 基础控件**：按钮 / 卡片 / 开关 / 输入框 / 进度条 / 滑块 / 下拉 / 侧边栏，纯色 Material 风格
-- **液态玻璃控件**：同几何、同交互的玻璃版本——背景折射 + 半透明着色 + 中心透光（自建离屏 GL 渲染，失败自动降级 CPU，永不黑屏）
-
-全部控件基于 `Md3Theme` 取色，主题切换走 `setTheme()` / `applyGlassStyle()`，深浅色界面可一键切换。
+纯 QPainter 手绘 + 官方素材可选加载：斜切平行四边形（skew -16°）按钮/进度条/卡片、白玻顶栏、青蓝主题色（#4EC3F5）、黄色标题下划线（#FFE433）、BA 官方字体/地图背景/货币图标等，并有复刻 BASpark 的粒子特效组件（点击波纹 + 白/粉/蓝星 + 拖尾发光带）。
 
 ## 特性
 
-- **MD3 动态主题**：`makeMonetTheme(seed, dark)` 一键生成整套 Material You 角色色；`extractMonetSeed(pixmap)` 从图片量化提取种子色
-- **双渲染路径**：`LiquidGlassPanel` 优先自建 QOpenGLContext + FBO 离屏渲染；GL 不可用（如 NVIDIA+Wayland EGL 3009）自动降级同名 CPU 管线，截图可加 `MD3_GL_DISABLE=1` 强制对比
-- **抓帧稳定**：全玻璃控件统一经 `grabGlassBackdrop` 抓窗快照做材质源（隐藏玻璃自身 + FadeOverlay 遮罩），带布局落定 / 限流补抓 / 防重入，Hyprland 等异步 resize 平台下不会残留旧几何
-- **真实苹果质感**：桶形倒角折射（中央平坦、边缘倒角弧面 Snell 近似）、菲涅耳边缘光、中心透光、白描边
+- **24 个组件**：按钮/滑块/复选框/进度条/顶栏/页面页签/任务卡/商店菜单块/对话气泡/基础卡/信息卡/玩家卡/面板/黑晶片/弹窗/背景/底部导航/侧栏/粒子特效等
+- **BA 设计语言**：-16° 斜切家族（`BaStyle::skewRectPath`，含防裁剪预压缩）、青蓝渐变按钮、白玻胶囊、黄色下划线、黑晶片
+- **官方素材可选**：字体（Blueaka/Mushin/Gyeonggi）、7 张地图背景、货币图标、设置标题条、鼠标指针——加载失败自动回退手绘
+- **零外部依赖**：仅 Qt6 Widgets (+OpenGL 仅部分 demo 用)；C++17
+- **粒子特效** `BaSpark`：点击波纹（原版 BASpark 参数）、喷星（白/粉/蓝随机）、按住拖动的发光马尾（越旧越细越淡）
 
-## 目录结构
+## 组件清单
 
-```text
-blue_archive_ui/
-├── CMakeLists.txt            # 构建静态库 blue_archive_ui（+ 可选示例）
-├── src/
-│   ├── blue_archive_ui.h          # 聚合头：一行 include 全量组件
-│   ├── md3_theme.h/.cpp      # Md3Theme 主题
-│   ├── monet_theme.h/.cpp    # 莫奈主题生成（种子色/图片提取）
-│   ├── md3_button.h/.cpp     # Md3Button
-│   ├── md3_card.h/.cpp       # Md3Card
-│   ├── md3_switch.h/.cpp     # Md3Switch
-│   ├── md3_text_field.h/.cpp # Md3TextField
-│   ├── md3_progress_bar.h/.cpp
-│   ├── md3_slider.h/.cpp
-│   ├── md3_dropdown.h/.cpp
-│   ├── md3_side_bar.h/.cpp   # Md3SideBar（含 Glyph 图标枚举）
-│   ├── liquid_glass.h/.cpp       # LiquidGlassPanel / LiquidGlassButton + GL 探测
-│   └── liquid_glass_widgets.h/.cpp # 玻璃开关/滑块/进度条/卡片/导航栏 + 抓帧基点
-├── third_party/material_color_utilities/   # Google 官方 C++ 实现（Apache-2.0）
-└── examples/minimal.cpp      # 最小用法示例
-```
+| 分组 | 组件 |
+| --- | --- |
+| 基础 | `BaButton`、`BaCheckBox`、`BaSlider`、`BaProgressBar`、`BaSectionHeader` |
+| 结构 | `BaTopBar`（Page/Hall 双形态）、`BaNavigationBar`、`BaTabColumn`、`BaPageTabs` |
+| 卡片 | `BaCard`（斜切+行式布局）、`BaPanel`、`BaChip`（黑晶片）、`BaBountyCard`、`BaMissionCard`、`BaInfoCard`、`BaPlayerCard` |
+| 对话 | `BaDialog`、`BaVoiceBubble`、`BaShopMenuBlock` |
+| 背景 | `BaBackground`（官方背景图/手绘天空双模式） |
+| 特效 | `BaSpark`（点击波纹/喷星/发光拖尾） |
+| 工具 | `BaStyle`（色彩/渐变/路径/缓动）、`BaAssets`（素材加载/字体/光标）、`BaIcon`（手绘矢量图标/官方图标） |
 
-## 构建与运行示例
-
-```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
-./build/blue_archive_ui_minimal
-```
-
-## 在项目中使用
+## 快速开始
 
 ```cmake
-add_subdirectory(../blue_archive_ui blue_archive_ui)
-
-add_executable(app main.cpp)
-target_link_libraries(app PRIVATE blue_archive_ui)
+# CMakeLists.txt
+add_subdirectory(BlueArchiveUI)
+target_link_libraries(your_app PRIVATE blue_archive_ui)
 ```
-
-头文件（内含全部组件）：
-
-```cpp
-#include "blue_archive_ui.h"
-```
-
-## 快速上手
 
 ```cpp
 #include <QApplication>
-#include <QWidget>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QLabel>
-#include "blue_archive_ui.h"
+#include "blue_archive_ui.h"   // 一行引入全量
 
-class Demo : public QWidget {
-public:
-    Demo() {
-        theme_ = Md3Theme::dark();
-
-        auto *lay = new QVBoxLayout(this);
-        auto *btn = new Md3Button("切换主题");
-        connect(btn, &QAbstractButton::clicked, this, [this] {
-            dark_ = !dark_;
-            theme_ = dark_ ? Md3Theme::dark() : Md3Theme::light();
-            applyTheme();
-        });
-
-        auto *glass = new LiquidGlassPanel;
-        glass->setMinimumSize(360, 240);
-        auto *gl = new QVBoxLayout(glass);
-        gl->setContentsMargins(32, 28, 32, 28);
-        gl->addWidget(new QLabel("玻璃面板：自动折射窗口背景"));
-        gl->addWidget(new Md3Button("普通按钮"));
-
-        auto *sw = new LiquidGlassSwitch;
-        auto *bar = new LiquidGlassProgressBar;
-        bar->setRange(0, 100);
-        bar->setValue(60);
-
-        lay->addWidget(btn);
-        lay->addWidget(glass, 1);
-        lay->addWidget(sw);
-        lay->addWidget(bar);
-        applyTheme();
-    }
-
-private:
-    void applyTheme() {
-        // 主题角色色传给所有绘制控件
-        for (auto *b : findChildren<Md3Button *>()) b->setTheme(theme_);
-        for (auto *k : findChildren<LiquidGlassThemeKeeper *>()) {
-            k->setTheme(theme_);
-            k->applyGlassStyle(dark_);
-            k->refreshBackdrop();   // 背景颜色变了要重新抓帧
-        }
-    }
-
-    Md3Theme theme_;
-    bool dark_ = true;
-};
-
-int main(int argc, char **argv) {
+int main(int argc, char **argv)
+{
     QApplication app(argc, argv);
-    app.setStyle("Fusion");
-    Demo w;
-    w.resize(760, 480);
-    w.show();
+
+    BaAssets::enableCursor();  // 可选：注册官方字体 + 装 BA 鼠标
+
+    QWidget win;
+    win.resize(1180, 740);
+
+    // 顶栏（Page 形态）
+    BaTopBar *top = new BaTopBar(QStringLiteral("任務"), &win);
+    top->setWallet(QStringLiteral("152"), QStringLiteral("16,118,958"), QStringLiteral("685"));
+    top->setGeometry(0, 0, 1180, 64);
+
+    // 斜切按钮
+    auto *btn = new BaButton(QStringLiteral("確定"), ba::SurfaceRole::Sky, &win);
+    btn->setGeometry(40, 120, 140, 44);
+
+    // 进度条
+    auto *bar = new BaProgressBar(&win);
+    bar->setGeometry(40, 180, 500, 22);
+    bar->setRange(0, 100);
+    bar->setValue(62);
+
+    win.show();
     return app.exec();
 }
 ```
 
-完整可编译示例见 `examples/minimal.cpp`（`cmake -B build && cmake --build build` 后运行 `./build/blue_archive_ui_minimal`）。
+## 演示程序
 
-## 组件速查
+构建后（见下），仓库存有 9 个演示目标：
 
-| 组件 | 头文件 | 关键 API | 说明 |
-| --- | --- | --- | --- |
-| `Md3Theme` | md3_theme.h | `light()` `dark()` `blend(a,b,t)` | 全部色彩角色 + 状态层混合 |
-| `makeMonetTheme(seed, dark)` | monet_theme.h | `Md3Theme` 返回 | 种子色 → 整套 MD3 主题 |
-| `extractMonetSeed(pixmap)` | monet_theme.h | `std::optional<QColor>` | 图片量化提取主题种子色 |
-| `Md3Button` | md3_button.h | `setStyle(Style)` `setTheme()` | Filled/Tonal/Outlined/Text，40 高 |
-| `Md3Card` | md3_card.h | `setContent()` | 12px 圆角 + hover 状态层 |
-| `Md3Switch` | md3_switch.h | 继承 QAbstractButton | 52x32，200ms 动画 |
-| `Md3TextField` | md3_text_field.h | 继承 QLineEdit | 填充式输入框 |
-| `Md3ProgressBar` | md3_progress_bar.h | `setRange/setValue/setIndeterminate` | 4px 进度 + 不确定动画 |
-| `Md3Slider` | md3_slider.h | `setRange/setValue` `valueChanged` | 48 高，44px 竖条 thumb |
-| `Md3Dropdown` | md3_dropdown.h | `addItem` `currentIndexChanged` | 下拉选择 |
-| `Md3SideBar` | md3_side_bar.h | `Glyph{}` `addItem` `currentIndexChanged` | MD3 Navigation Rail |
-| `LiquidGlassPanel` | liquid_glass.h | `applyGlassStyle(dark)` `refreshBackdrop()` `setRefraction(k)` `setCornerRadius(r)` | 玻璃面板（折射窗口背景） |
-| `LiquidGlassButton` | liquid_glass.h | 继承 QAbstractButton | 玻璃按钮（纯着色） |
-| `LiquidGlassSwitch` | liquid_glass_widgets.h | 同 Md3Switch | 玻璃开关 |
-| `LiquidGlassSlider` | liquid_glass_widgets.h | `setRange/setValue` `valueChanged` | 玻璃滑块 |
-| `LiquidGlassProgressBar` | liquid_glass_widgets.h | `setRange/setValue` | 玻璃进度条 |
-| `LiquidGlassCard` | liquid_glass_widgets.h | `setContent()` | 玻璃卡片 |
-| `LiquidGlassNavigationBar` | liquid_glass_widgets.h | `addItem(label, Glyph)` `setCurrentIndex` | iOS 26 悬浮玻璃导航条 |
-| `LiquidGlassThemeKeeper` | liquid_glass_widgets.h | `setTheme()` `applyGlassStyle()` `refreshBackdrop()` | 玻璃控件公共基类（抓帧/主题） |
-| `grabGlassBackdrop` | liquid_glass.h | `(self, w)` | 全窗快照（隐藏玻璃控件/遮罩） |
-| `renderGlassPlateCPU` | liquid_glass.h | `(backdrop, panelRect, size, ...)` | 纯 CPU 玻璃板渲染 |
+```
+./build/blue_archive_ui_all_demo           # 全组件总汇（可滚动）
+./build/blue_archive_ui_integrated_demo    # 整合页（顶栏+按钮/声音/进度/卡片+粒子装饰层）
+./build/blue_archive_ui_topbar_demo        # 顶栏（Page/Hall、自适应宽度）
+./build/blue_archive_ui_button_demo        # 按钮色板预览
+./build/blue_archive_ui_progress_demo      # 进度条（Daily Login 复刻）
+./build/blue_archive_ui_slider_demo        # 滑块（音量设置）
+./build/blue_archive_ui_options_demo       # Options 弹窗复刻
+./build/blue_archive_ui_info_demo          # 账号信息页复刻
+./build/blue_archive_ui_card_demo          # 基础卡片
+./build/blue_archive_ui_spark_demo         # 粒子特效（点击/拖动试玩）
+```
 
-## 设计约定
+大多数 demo 支持 `--screenshot <png>` 无头截图（需 `QT_QPA_PLATFORM=xcb` 运行环境）。
 
-- **明暗主题**：`Md3Theme::light()/dark()` 生成两套角色色，控件持有副本（`setTheme`），无全局单例污染。
-- **玻璃控件材质**：`LiquidGlassThemeKeeper` 家族自动抓取窗口快照作为材质源；`refreshBackdrop()`（强制模式）用于页面/主题切换后重抓。抓帧会被零时延调度 + 300ms 实例限流，避免布局未稳抓帧与重绘风暴。
-- **GL 与 CPU 双路径**：`LiquidGlassPanel` 用自建离屏 QOpenGLContext + FBO 渲染玻璃帧；上下文创建失败（NVIDIA+Wayland 3009 BAD_MATCH 等平台坑）自动降级 CPU 软渲染，两者视觉一致、永不黑屏。可用 `isGpuRendering()` 查询通道。
-- **小控件取景**：LiquidGlassSlider / ProgressBar 按轨道矩形取景（`renderGlassPlate` 的 `viewRect` 参数），保证小件上倒角折射带占比足够。
+## 构建
 
-## 许可证
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j8
+```
 
-- **blue_archive_ui 本体**：MIT（见 `LICENSE`）
-- **third_party/material_color_utilities**：Google 官方 C++ 实现，Apache-2.0（见 `third_party/material_color_utilities/LICENSE`），许可证没有授权它被 embedding 后覆盖本项目的许可，遵循 Apache-2.0 再分发条款
+依赖：CMake ≥3.16、Qt6（Widgets、OpenGL）、C++17 编译器。
+
+## 素材
+
+`assets/` 目录为**可选运行素材**（Blue Archive 游戏解包资源，版权归 Nexon 所有，仅作学习参考，请勿二次分发）。`BaAssets` 自动探测目录：`$EXE_DIR/../assets` → `$EXE_DIR/assets` → 当前工作目录 `assets/`，命中 `fonts/` 子目录即加载字体。
+
+- `assets/fonts/`：Blueaka.ttf、mushin.otf、Gyeonggi_Title_{Medium,Light}.ttf
+- `assets/img/bg/`：7 张 1920×1080 官方地图背景
+- `assets/img/icons/`：官方货币图标（AP 行动体力/金币/青辉石）
+- `assets/img/ui/`：设置标题条装饰 `settingTitleBG.png`、官方鼠标指针 `cursor-default.png`
+
+不放置素材时全部组件使用纯 QPainter 手绘回退，功能不受影响。
+
+## 许可
+
+代码（本仓库）MIT 风格开源；Blue Archive 名称与素材版权归 Nexon。素材仅用于私人学习。

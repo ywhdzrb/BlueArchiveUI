@@ -25,5 +25,6 @@ ui_*.h
 _autogen/
 
 # 本地临时文件
-*.png
 dbg_*.txt
+
+.playwright-mcp

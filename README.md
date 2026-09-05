@@ -1,5 +1,7 @@
 # BlueArchiveUI
 
+<img src="assets/logo/BlueArchive-UI_symbolon.png" width="256" alt="BlueArchiveUI logo">
+
 模仿游戏《Blue Archive》（蔚蓝档案）界面风格的 **Qt6 Widgets 组件库**。
 
 纯 QPainter 手绘 + 官方素材可选加载：斜切平行四边形（skew -16°）按钮/进度条/卡片、白玻顶栏、青蓝主题色（#4EC3F5）、黄色标题下划线（#FFE433）、BA 官方字体/地图背景/货币图标等，并有复刻 BASpark 的粒子特效组件（点击波纹 + 白/粉/蓝星 + 拖尾发光带）。

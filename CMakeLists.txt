@@ -64,12 +64,19 @@ set(BLUE_ARCHIVE_UI_SOURCES
     ${MCU_SOURCES}
 )
 
-add_library(blue_archive_ui STATIC ${BLUE_ARCHIVE_UI_SOURCES})
+# 公开头文件（include/blue_archive_ui/）纳入 target 以便 AUTOMOC 生成 moc/vtable
+file(GLOB BLUE_ARCHIVE_UI_HEADERS CONFIGURE_DEPENDS
+    include/blue_archive_ui/*.h
+)
+
+add_library(blue_archive_ui STATIC ${BLUE_ARCHIVE_UI_SOURCES} ${BLUE_ARCHIVE_UI_HEADERS})
 
 target_include_directories(blue_archive_ui
     PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/blue_archive_ui
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/material_color_utilities
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 target_link_libraries(blue_archive_ui PUBLIC Qt6::Widgets Qt6::OpenGL)

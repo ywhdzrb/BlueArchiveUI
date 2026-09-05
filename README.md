@@ -69,6 +69,10 @@ int main(int argc, char **argv)
 
 ## 演示程序
 
+![整合页](assets/screenshots/integrated_demo.png)
+
+![六个组件演示总览](assets/screenshots/overview.png)
+
 构建后（见下），仓库存有 9 个演示目标：
 
 ```

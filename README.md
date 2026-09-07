@@ -1,4 +1,4 @@
-BlueArchiveUI
+# BlueArchiveUI
 
 <img src="assets/logo/BlueArchive-UI_symbolon.png" width="360" alt="BlueArchiveUI logo">
 
@@ -6,7 +6,7 @@ BlueArchiveUI
 
 > 学生党，更新随缘，目前还没完全还原。
 
-现在有的
+## 现在有的
 
 目前有 24 个组件，基本覆盖了常见 UI 元素：
 
@@ -18,16 +18,16 @@ BlueArchiveUI
 · 粒子特效：点击波纹、喷星、拖尾光效（接近原版点击特效）
 
 
-怎么用
+## 怎么用
 
-CMake 引入：
+### CMake 引入：
 
 ```cmake
 add_subdirectory(BlueArchiveUI)
 target_link_libraries(your_app PRIVATE blue_archive_ui)
 ```
 
-代码里：
+### 代码里：
 
 ```cpp
 #include <QApplication>
@@ -59,7 +59,7 @@ int main(int argc, char **argv) {
 }
 ```
 
-编译
+###编译
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -85,12 +85,12 @@ cmake --build build -j8
 
 多数 demo 支持 --screenshot <文件名>.png 无头截图（需要 xcb 环境）。
 
-素材
+## 素材
 
 assets/ 目录下放的是游戏解包资源（字体、背景图、图标、光标），版权归 Nexon，仅供个人学习，请勿二次分发。
 BaAssets 会自动在 ../assets、./assets 等路径查找，找不到就用手绘回退，不影响功能。
 
-许可
+##许可
 
 代码部分 MIT 协议；素材和“蔚蓝档案”名称版权归 Nexon。
 

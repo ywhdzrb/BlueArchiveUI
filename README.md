@@ -59,12 +59,13 @@ int main(int argc, char **argv) {
 }
 ```
 
-###编译
+### 编译
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j8
 ```
+---
 
 需要 CMake ≥3.16、Qt6（Widgets + OpenGL）、C++17 编译器。
 

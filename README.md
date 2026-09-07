@@ -65,11 +65,12 @@ int main(int argc, char **argv) {
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j8
 ```
----
 
 需要 CMake ≥3.16、Qt6（Widgets + OpenGL）、C++17 编译器。
 
-附带的 demo
+---
+
+### 附带的 demo
 
 构建后会有这些可执行文件（在 build/ 下）：
 
